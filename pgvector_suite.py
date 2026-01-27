@@ -38,15 +38,14 @@ class TestSuite(common.TestSuite):
         conn = psycopg.connect(url)
         conn.execute(f"SET hnsw.ef_search={ef_search}")
 
-        # Use prepared statement for repeated queries
-        conn.execute(f"PREPARE bench_query (vector) AS SELECT id FROM {table_name} ORDER BY embedding {metric_ops} $1 LIMIT {top}")
+        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
 
         results = []
         for query, ground_truth in zip(test, answer):
             query_list = query.tolist() if hasattr(query, "tolist") else list(query)
             start = time.perf_counter()
             with conn.cursor() as cursor:
-                cursor.execute("EXECUTE bench_query (%s)", (query_list,))
+                cursor.execute(query_sql, (query_list,))
                 result = cursor.fetchall()
             end = time.perf_counter()
 
@@ -56,7 +55,6 @@ class TestSuite(common.TestSuite):
             hit = len(result_ids & ground_truth_ids)
             results.append((hit, (start, end)))
 
-        conn.execute("DEALLOCATE bench_query")
         conn.close()
         return results
 

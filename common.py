@@ -579,21 +579,22 @@ class TestSuite:
         print(f"Running sequential benchmark with {m} queries")
         conn.execute("SET jit=false")
 
-        # Use prepared statement for repeated queries
-        conn.execute(f"PREPARE bench_query (vector) AS SELECT id FROM {table_name} ORDER BY embedding {metric_ops} $1 LIMIT {top}")
-
         # Pre-convert answers if numpy
         answers_list = dataset["answer"]
         if hasattr(answers_list, "tolist"):
             answers_list = [a[:top].tolist() if hasattr(a, "tolist") else a[:top] for a in answers_list]
 
+        # Build query template (psycopg3 handles prepared statement caching)
+        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
+
         results = []
         pbar = tqdm(enumerate(dataset["test"]), total=m, ncols=80,
                     bar_format="{desc} {n}/{total}: {percentage:3.0f}%|{bar}|")
         for i, query in pbar:
+            query_list = query.tolist() if hasattr(query, "tolist") else list(query)
             start = time.perf_counter()
             with conn.cursor() as cursor:
-                cursor.execute("EXECUTE bench_query (%s)", (query,))
+                cursor.execute(query_sql, (query_list,))
                 result = cursor.fetchall()
             end = time.perf_counter()
 
@@ -612,7 +613,6 @@ class TestSuite:
             pbar.set_description(f"recall: {recall_color}{curr_recall:.4f}\033[0m QPS: {curr_qps:.2f} P50: {curr_p50:.2f}ms")
 
         pbar.close()
-        conn.execute("DEALLOCATE bench_query")
         return results, metric_ops
 
     def parallel_bench(self, name, table_name, dataset, metric_ops, top, query_clients, benchmark):
