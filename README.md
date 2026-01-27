@@ -1,45 +1,306 @@
-# Usage
+# Vector Search Benchmark Suite
+
+A comprehensive benchmarking tool for PostgreSQL vector search extensions. Compare performance across **pgvector**, **VectorChord**, and **PGPU** (GPU-accelerated) on datasets ranging from 1M to 1B vectors.
+
+## Supported Extensions
+
+| Extension | Index Type | Description |
+|-----------|------------|-------------|
+| **pgvector** | HNSW | Standard CPU-based approximate nearest neighbor search |
+| **VectorChord** | IVF (vchordrq) | Inverted file index with residual quantization |
+| **PGPU** | IVF via GPU | GPU-accelerated index building with VectorChord |
+
+## Supported Datasets
+
+| Dataset | Vectors | Dimensions | Metric | Type |
+|---------|---------|------------|--------|------|
+| laion-1m-test-ip | 1M | 512 | Inner Product | HDF5 |
+| laion-5m-test-ip | 5M | 512 | Inner Product | HDF5 |
+| laion-20m-test-ip | 20M | 512 | Inner Product | HDF5 |
+| laion-100m-test-ip | 100M | 512 | Inner Product | HDF5 |
+| laion-400m-test-ip | 400M | 512 | Inner Product | NPY (multipart) |
+| deep1b-test-l2 | 1B | 96 | L2 | NPY (mmap) |
+| sift-128-euclidean | 1M | 128 | L2 | HDF5 |
+| glove-test-cos | 1.2M | 100 | Cosine | HDF5 |
+
+Datasets are automatically downloaded on first use.
+
+## Installation
+
+### Prerequisites
+
+- Python 3.10+
+- PostgreSQL 15+ with one of the supported extensions installed
+- `iostat` for system monitoring (Linux)
+
+### Install Dependencies
+
+```bash
+# Install system dependencies (Linux)
+sudo apt-get install nvme-cli sysstat
+
+# Install Python dependencies
+pip install -r requirements.txt
+```
+
+### Required PostgreSQL Extensions
+
+Depending on which benchmark suite you want to run:
+
+```sql
+-- For pgvector benchmarks
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_prewarm;
+
+-- For VectorChord benchmarks
+CREATE EXTENSION IF NOT EXISTS vchord CASCADE;
+
+-- For PGPU benchmarks
+CREATE EXTENSION IF NOT EXISTS vchord CASCADE;
+CREATE EXTENSION IF NOT EXISTS pgpu;
+```
+
+## Usage
+
+### Basic Command Structure
+
+```bash
+python <suite>.py -s config/<config>.yaml [options]
+```
+
+### Common Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-s, --suite` | YAML configuration file (required) | - |
+| `--url` | PostgreSQL connection URL | `postgresql://postgres@localhost:5432/postgres` |
+| `--devices` | Block devices to monitor | `dm-0` |
+| `--chunk-size` | Chunk size for loading data | `1000000` |
+| `--num_processes` | Parallel query processes | `1` |
+| `--max-load-threads` | Threads for loading embeddings | `4` |
+| `--skip-add-embeddings` | Skip data loading step | `false` |
+| `--skip-index-creation` | Skip index build step | `false` |
+| `--overwrite-table` | Drop existing table first | `false` |
+| `--debug` | Enable debug logging | `false` |
+
+### Running pgvector Benchmarks
+
+```bash
+# Run with default 5M dataset configuration
+python pgvector_suite.py -s config/pgvector_suite.yaml \
+    --url "postgresql://postgres@localhost:5432/postgres" \
+    --devices nvme0n1
+
+# Skip loading if data already exists
+python pgvector_suite.py -s config/pgvector_suite.yaml \
+    --skip-add-embeddings \
+    --url "postgresql://postgres@localhost:5432/postgres"
+```
+
+### Running VectorChord Benchmarks
+
+```bash
+# Run 5M dataset benchmark
+python vectorchord_suite.py -s config/vectorchord_suite.yaml \
+    --url "postgresql://postgres@localhost:5432/postgres" \
+    --devices nvme0n1
+
+# Run 100M dataset benchmark
+python vectorchord_suite.py -s config/vectorchord_suite_100m.yaml \
+    --url "postgresql://postgres@localhost:5432/postgres"
+
+# Run 1B dataset benchmark
+python vectorchord_suite.py -s config/vectorchord_suite_1B.yaml \
+    --url "postgresql://postgres@localhost:5432/postgres"
+```
+
+### Running PGPU (GPU-Accelerated) Benchmarks
+
+```bash
+# Run GPU-accelerated index build
+python pgpu_suite.py -s config/pgpu_suite.yaml \
+    --url "postgresql://postgres@localhost:5432/postgres" \
+    --devices nvme0n1
+
+# Run with 100M dataset
+python pgpu_suite.py -s config/pgpu_suite_100m.yaml \
+    --url "postgresql://postgres@localhost:5432/postgres"
+```
+
+### Using External Centroids
+
+For VectorChord and PGPU, you can provide pre-computed centroids:
+
+```bash
+# Using a centroids file
+python vectorchord_suite.py -s config/vectorchord_suite.yaml \
+    -c centroids.npy \
+    --url "postgresql://postgres@localhost:5432/postgres"
+
+# Using an existing centroids table
+python vectorchord_suite.py -s config/vectorchord_suite.yaml \
+    -ct public.my_centroids \
+    --url "postgresql://postgres@localhost:5432/postgres"
+```
+
+### Parallel Query Benchmarking
+
+Run queries in parallel to measure throughput under load:
+
+```bash
+python pgvector_suite.py -s config/pgvector_suite.yaml \
+    --num_processes 8 \
+    --skip-add-embeddings \
+    --skip-index-creation
+```
+
+## Configuration Files
+
+### pgvector Configuration Example
+
+```yaml
+pgvector-laion-5m-m16-256:
+  dataset: laion-5m-test-ip
+  datasetType: hdf5
+  workers: 63
+  metric: dot
+  m: 16                    # HNSW M parameter
+  efConstruction: 256      # HNSW ef_construction
+  top: 10                  # Top-K results
+  benchmarks:
+    "40": { efSearch: 40 }
+    "80": { efSearch: 80 }
+    "200": { efSearch: 200 }
+```
+
+### VectorChord Configuration Example
+
+```yaml
+vc-laion-5m-8192-test-ip:
+  dataset: laion-5m-test-ip
+  datasetType: hdf5
+  metric: ip
+  lists: [90, 8192]        # Hierarchical IVF lists
+  samplingFactor: 64
+  workers: 63
+  kmeans_hierarchical: true
+  kmeans_dimension: 100
+  residual_quantization: false
+  top: 10
+  benchmarks:
+    20-1.0:
+      nprob: 2,20          # Probes per level
+      epsilon: 1.0
+    50-1.5:
+      nprob: 16,50
+      epsilon: 1.5
+```
+
+### PGPU Configuration Example
+
+```yaml
+pgpu-laion-100m-160000-test-ip:
+  dataset: laion-100m-test-ip
+  datasetType: hdf5
+  metric: dot
+  nlists: 160000
+  samplingFactor: 256
+  batchSize: 10000000
+  workers: 63
+  top: 10
+  benchmarks:
+    50-1.0:
+      nprob: 50
+      epsilon: 1.0
+```
+
+## Output
+
+Results are saved to `./results/<suite_name>/`:
+
+| File | Description |
+|------|-------------|
+| `benchmark_results.md` | Summary table with all metrics |
+| `system_report.txt` | Hardware and system information |
+| `cpu_utilization.csv/png` | CPU metrics over time |
+| `*_io_iops.csv` | IOPS data per device |
+| `*_io_bandwidth.csv` | Bandwidth data per device |
+| `*_io_latency.csv` | IO latency data |
+| `metrics_summary.html` | Visual summary of all charts |
+
+### Metrics Reported
+
+| Metric | Description |
+|--------|-------------|
+| **Recall@K** | Fraction of true nearest neighbors found |
+| **QPS** | Queries per second |
+| **P50 Latency** | Median query latency (ms) |
+| **P99 Latency** | 99th percentile latency (ms) |
+| **Index Size** | On-disk index size |
+| **Build Time** | Time to create the index |
+| **Load Time** | Time to load embeddings |
+
+## Utility Scripts
+
+### Reduce Free Memory
+
+Simulate memory-constrained environments:
+
+```bash
+# Leave only 32GB of free memory
+sudo ./reduce_free_memory.sh 32
+```
+
+### Convert Deep1B Dataset
+
+Convert Deep1B binary files to NPY format:
+
+```bash
+cd utils
+python convert_deep1b.py
+```
+
+### Verify Deep1B Files
+
+Check integrity of downloaded Deep1B files:
+
+```bash
+cd utils
+python verify_deep1B.py
+```
+
+## Project Structure
 
 ```
-$ sudo python3 benchmark/bench.py -h
-usage: bench.py [-h] [-e {pgvector,vectorchord}] [-m {l2,cos,dot}] -n NAME -i INPUT --url URL -d DIM [-w WORKERS] [--chunks CHUNKS] [--results_dir RESULTS_DIR] --devices DEVICES
-                [DEVICES ...] [--top {10,100}]
-
-Index Benchmarking Tool
-
-options:
-  -h, --help            show this help message and exit
-  -e {pgvector,vectorchord}, --extension {pgvector,vectorchord}
-                        Extension to use
-  -m {l2,cos,dot}, --metric {l2,cos,dot}
-                        Distance metric
-  -n NAME, --name NAME  Dataset name, like: sift
-  -i INPUT, --input INPUT
-                        Input filepath
-  --url URL             url, like `postgresql://postgres:123@localhost:5432/postgres`
-  -d DIM, --dim DIM     Dimension
-  -w WORKERS, --workers WORKERS
-                        Workers to build index
-  --chunks CHUNKS       chunks for in-memory mode. If OOM, increase it
-  --results_dir RESULTS_DIR
-                        Folder to store the results
-  --devices DEVICES [DEVICES ...]
-                        Block devices to be monitored
-  --top {10,100}        Top K for recall calculation
+vector-search/
+├── common.py                 # Base test suite class
+├── datasets.py               # Dataset download and loading
+├── pgvector_suite.py         # pgvector HNSW benchmarks
+├── vectorchord_suite.py      # VectorChord IVF benchmarks
+├── pgpu_suite.py             # GPU-accelerated benchmarks
+├── requirements.txt          # Python dependencies
+├── config/                   # Benchmark configurations
+│   ├── pgvector_suite.yaml
+│   ├── vectorchord_suite.yaml
+│   ├── vectorchord_suite_100m.yaml
+│   ├── vectorchord_suite_1B.yaml
+│   ├── pgpu_suite.yaml
+│   ├── pgpu_suite_100m.yaml
+│   └── ...
+├── monitor/
+│   └── os_stats.py           # System monitoring
+├── utils/
+│   ├── convert_deep1b.py     # Deep1B format converter
+│   └── verify_deep1B.py      # File integrity checker
+└── results/                  # Output directory
 ```
 
-# Dependency
+## Contributors
 
-```
-# Need nvme cli
-sudo apt-get install nvme-cli
+- **Alessandro Ferraresi** - Initial creator
+- **Huan Zhang**
+- **Tim Waizenegger**
 
-# Install Python dependency
-pip3 install -r requirements.txt
-```
+## License
 
-# Example
-
-```
-sudo python3 benchmark/bench.py -e pgvector -n train -i laion-1m-test-ip.hdf5 -m l2 -d 768 --url postgresql://postgres:123@localhost:5432/postgres --results_dir ./results --devices dm-0
-```
+See LICENSE file for details.
