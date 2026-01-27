@@ -314,7 +314,7 @@ class TestSuite:
             conn.close()
 
         chunk_size = self.chunk_size
-        pbar = tqdm(desc="Adding embeddings", total=n, ncols=80)
+        pbar = tqdm(desc="Adding embeddings", total=n, ncols=80, unit_scale=True, unit="rows")
         threads = []
         for i in range(0, n, chunk_size):
             chunk_start = i
@@ -402,7 +402,7 @@ class TestSuite:
                 t_conn.close()
 
             # Initialize Progress Bar in "rows"
-            pbar = tqdm(desc="Adding embeddings", total=n, unit="rows", ncols=80)
+            pbar = tqdm(desc="Adding embeddings", total=n, unit="rows", ncols=80, unit_scale=True)
 
             if num_threads > 1: # Careful with python GIL and I/O bound
                 print(f"Parallel load enabled for {name}. Threads: {num_threads}")
@@ -433,7 +433,7 @@ class TestSuite:
             print(f"Sequential load for {name} (Generator source)")
             conn = self.create_connection()
             # Initialize Pbar for generator
-            pbar = tqdm(desc="Adding embeddings", total=n, unit="rows", ncols=80)
+            pbar = tqdm(desc="Adding embeddings", total=n, unit="rows", ncols=80, unit_scale=True)
 
             with conn.cursor().copy(
                     f"COPY {name} (id, embedding) FROM STDIN WITH (FORMAT BINARY)"
