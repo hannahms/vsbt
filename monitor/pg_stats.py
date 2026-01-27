@@ -22,6 +22,87 @@ class PGStatsCollector:
         self.conn = conn
         self.snapshots = {}
         self._pg_stat_statements_available = None
+        self._custom_settings = None
+
+    def get_custom_settings(self) -> list[dict]:
+        """
+        Get PostgreSQL settings that differ from their default values.
+
+        Returns a list of dicts with name, setting, unit, boot_val, and source.
+        """
+        if self._custom_settings is not None:
+            return self._custom_settings
+
+        # Categories relevant to performance benchmarking
+        relevant_categories = [
+            'Autovacuum',
+            'Client Connection Defaults / Statement Behavior',
+            'Connections and Authentication / Connection Settings',
+            'Resource Usage / Background Writer',
+            'Resource Usage / Memory',
+            'Resource Usage / Asynchronous Behavior',
+            'Resource Usage / Disk',
+            'Write-Ahead Log / Checkpoints',
+            'Write-Ahead Log / Settings',
+            'Query Tuning / Planner Cost Constants',
+            'Query Tuning / Planner Method Configuration',
+            'Query Tuning / Other Planner Options',
+            'Query Tuning / Parallel Query',
+        ]
+
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    name,
+                    setting,
+                    unit,
+                    boot_val,
+                    source,
+                    category
+                FROM pg_settings
+                WHERE source NOT IN ('default', 'override')
+                  AND setting != boot_val
+                ORDER BY category, name
+            """)
+
+            self._custom_settings = []
+            for row in cur.fetchall():
+                name, setting, unit, boot_val, source, category = row
+                # Filter to relevant categories if they're performance-related
+                # or include all if category filtering is too restrictive
+                self._custom_settings.append({
+                    "name": name,
+                    "setting": setting,
+                    "unit": unit or "",
+                    "boot_val": boot_val,
+                    "source": source,
+                    "category": category,
+                })
+
+        return self._custom_settings
+
+    def format_custom_settings(self) -> str:
+        """Format custom PostgreSQL settings as markdown."""
+        settings = self.get_custom_settings()
+        if not settings:
+            return ""
+
+        lines = [
+            "## PostgreSQL Configuration",
+            "",
+            "Settings modified from defaults:",
+            "",
+            "| Setting | Value | Default | Source |",
+            "|---------|-------|---------|--------|",
+        ]
+
+        for s in settings:
+            value = f"{s['setting']}{s['unit']}" if s['unit'] else s['setting']
+            default = f"{s['boot_val']}{s['unit']}" if s['unit'] else s['boot_val']
+            lines.append(f"| {s['name']} | {value} | {default} | {s['source']} |")
+
+        lines.append("")
+        return "\n".join(lines)
 
     def _check_pg_stat_statements(self) -> bool:
         """Check if pg_stat_statements extension is available."""
@@ -442,14 +523,21 @@ class PGStatsCollector:
         Returns:
             Markdown-formatted string
         """
+        lines = []
+
+        # Include custom settings first
+        custom_settings_md = self.format_custom_settings()
+        if custom_settings_md:
+            lines.append(custom_settings_md)
+
         summary = self.get_summary()
         if not summary:
-            return ""
+            return "\n".join(lines) if lines else ""
 
-        lines = [
+        lines.extend([
             "## PostgreSQL Statistics",
             "",
-        ]
+        ])
 
         # Show final snapshot stats
         if summary["snapshots"]:
