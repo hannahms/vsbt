@@ -114,7 +114,7 @@ class ResultsManager:
             "benchmark_name": benchmark_name,
             "dataset": config.get("dataset", "N/A"),
             "metric": config.get("metric", "N/A"),
-            "workers": config.get("workers", "N/A"),
+            "pg_parallel_workers": config.get("pg_parallel_workers", "N/A"),
             "top": config.get("top", "N/A"),
             # Index config (varies by suite type)
             "m": config.get("m", "N/A"),
@@ -398,7 +398,7 @@ class ResultsManager:
         config_rows = [
             ["Dataset", str(config.get("dataset", "N/A"))],
             ["Metric", str(config.get("metric", "N/A"))],
-            ["Workers", str(config.get("workers", "N/A"))],
+            ["PG Parallel Workers", str(config.get("pg_parallel_workers", "N/A"))],
             ["Query Clients", str(query_clients)],
             ["Top-K", str(config.get("top", "N/A"))],
         ]

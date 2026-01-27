@@ -10,7 +10,7 @@ vc-deep1B-test-l2:
   kmeans_hierarchical: true
   residual_quantization: true
   build_threads: 32
-  workers: 32
+  pg_parallel_workers: 32
   top: 10
   benchmarks:
     10-20-1.0:

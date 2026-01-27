@@ -9,7 +9,7 @@ pgpu-laion-100m-160000-test-ip:
   kmeans_n_iter: 30
   random_sampling: True
   residual_quantization: false
-  workers: 63
+  pg_parallel_workers: 63
   top: 10
   benchmarks:
     10-20-1.0:

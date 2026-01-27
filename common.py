@@ -262,13 +262,21 @@ class TestSuite:
 
     # --- REMOVED OBSOLETE get_hdf5_dataset and get_npy_dataset ---
 
-    def add_embeddings_from_hdf5(self, suite_name, name, train, workers):
+    def add_embeddings_from_hdf5(self, suite_name, name, train, pg_parallel_workers):
         """Parallel add embeddings to the database from HDF5."""
         n, dim = train.shape
         start_time = time.perf_counter()
 
         conn = self.create_connection()
-        self.debug_log(f'Table_name: {name}, num: {n}, dim: {dim}, overwrite: {self.overwrite_table}')
+        if self.debug:
+            print(f"\n📦 Load Configuration (HDF5):")
+            print(f"    • Table:           {name}")
+            print(f"    • Rows:            {n:,}")
+            print(f"    • Dimensions:      {dim}")
+            print(f"    • Load Threads:    {self.max_load_threads}")
+            print(f"    • Chunk Size:      {self.chunk_size:,}")
+            print(f"    • Overwrite:       {self.overwrite_table}")
+            print()
 
         if self.overwrite_table:
             print(f"Dropping existing table {name}...", end="", flush=True)
@@ -287,7 +295,7 @@ class TestSuite:
             return
 
         conn.execute(f"CREATE TABLE {name} (id integer, embedding vector({dim}))")
-        conn.execute(f"ALTER TABLE {name} SET (parallel_workers = {workers})")
+        conn.execute(f"ALTER TABLE {name} SET (parallel_workers = {pg_parallel_workers})")
         conn.close()
 
         max_load_threads = self.max_load_threads
@@ -589,7 +597,6 @@ class TestSuite:
         test = dataset["test"]
         answer = dataset["answer"]
         m = test.shape[0]
-        self.debug_log(f"Parallel benchmark with {m} queries using {query_clients} clients")
 
         batches = []
         for _ in range(query_clients):
@@ -621,7 +628,15 @@ class TestSuite:
         metric = self.config[suite_name]["metric"]
         m = dataset["test"].shape[0]
 
-        self.debug_log(f"Running benchmark with top={top}, metric_ops={metric} and query_clients={query_clients}")
+        if self.debug:
+            print(f"\n🔍 Benchmark Configuration:")
+            print(f"    • Name:            {name}")
+            print(f"    • Queries:         {m:,}")
+            print(f"    • Top-K:           {top}")
+            print(f"    • Metric:          {metric}")
+            print(f"    • Clients:         {query_clients}")
+            print(f"    • Mode:            {'parallel' if query_clients > 1 else 'sequential'}")
+            print()
 
         if query_clients > 1:
             results, metric_ops = self.parallel_bench(suite_name, table_name, dataset, metric, top, query_clients,
@@ -663,7 +678,17 @@ class TestSuite:
 
         dataset_name = self.config[name]["dataset"]
         table_name = dataset_name.replace("-", "_")
-        self.debug_log(f"table_name: {table_name}, dataset: {dataset_name}, centroids: {self.centroids_table}")
+        config = self.config[name]
+        if self.debug:
+            print(f"\n⚙️  Suite Configuration:")
+            print(f"    • Test Name:       {name}")
+            print(f"    • Table:           {table_name}")
+            print(f"    • Dataset:         {dataset_name}")
+            print(f"    • PG Parallel Workers: {config.get('pg_parallel_workers')}")
+            print(f"    • Metric:          {config.get('metric')}")
+            print(f"    • Centroids Table: {self.centroids_table or 'None'}")
+            print(f"    • Benchmarks:      {len(config.get('benchmarks', {}))}")
+            print()
 
         # Initialize system monitor only for local databases
         if self.is_local_db:
@@ -694,7 +719,7 @@ class TestSuite:
                 self.system_monitor.mark_phase("load_start")
             ds_type = ds["type"]
             if ds_type == "hdf5":
-                self.add_embeddings_from_hdf5(name, table_name, ds["train"], self.config[name]["workers"])
+                self.add_embeddings_from_hdf5(name, table_name, ds["train"], self.config[name]["pg_parallel_workers"])
                 if hasattr(ds["train"], "close"):
                     ds["train"].close()
             elif ds_type in ["laion-multipart", "deep1b-mmap"]:
@@ -710,8 +735,6 @@ class TestSuite:
 
         if self.centroids is not None and not self.skip_index_creation:
             self.add_centroids_to_table(self.centroids)
-        if self.centroids_table and not self.skip_index_creation:
-            self.debug_log(f"Using centroids table: {self.centroids_table}")
 
         if "metric" in self.config[name]:
             ds["metric"] = self.config[name]["metric"]

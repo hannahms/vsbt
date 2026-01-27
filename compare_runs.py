@@ -321,7 +321,7 @@ def show_run_details(results_dir: Path, identifier: str):
     print("\nConfiguration:")
     config = parsed["config"]
     config_keys = ["dataset", "metric", "lists", "m", "efConstruction", "samplingFactor",
-                   "residual_quantization", "workers", "top"]
+                   "residual_quantization", "pg_parallel_workers", "top"]
     for key in config_keys:
         if key in config:
             print(f"  {key}: {config[key]}")

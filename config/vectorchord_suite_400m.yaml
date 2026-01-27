@@ -10,7 +10,7 @@ vc-laion-400m-160000-test-ip-128:
   build_threads: 32
   residual_quantization: false
   kmeans_hierarchical: true
-  workers: 32
+  pg_parallel_workers: 32
   top: 10
   benchmarks:
     10-20-1.0:

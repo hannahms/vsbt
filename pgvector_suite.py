@@ -134,22 +134,22 @@ class TestSuite(common.TestSuite):
         )
 
         config = self.config[suite_name]
-        workers = config["workers"]
+        pg_parallel_workers = config["pg_parallel_workers"]
         m = config["m"]
         ef_construction = config["efConstruction"]
         metric = dataset["metric"]
         metric_func = self._get_metric_func(metric)
 
         self.debug_log(
-            f"Index config: metric_func={metric_func}, workers={workers}, "
+            f"Index config: metric_func={metric_func}, pg_parallel_workers={pg_parallel_workers}, "
             f"m={m}, ef_construction={ef_construction}"
         )
 
         conn = self.create_connection()
         start_time = time.perf_counter()
 
-        conn.execute(f"SET max_parallel_maintenance_workers TO {workers}")
-        conn.execute(f"SET max_parallel_workers TO {workers}")
+        conn.execute(f"SET max_parallel_maintenance_workers TO {pg_parallel_workers}")
+        conn.execute(f"SET max_parallel_workers TO {pg_parallel_workers}")
         conn.execute(
             f"CREATE INDEX {table_name}_embedding_idx ON {table_name} "
             f"USING hnsw (embedding {metric_func}) WITH (m = {m}, ef_construction = {ef_construction})"

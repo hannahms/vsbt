@@ -146,7 +146,7 @@ class TestSuite(common.TestSuite):
 
         # Load configuration
         config = self.config[suite_name]
-        workers = config["workers"]
+        pg_parallel_workers = config["pg_parallel_workers"]
         lists = config["lists"]
         sampling_factor = config["samplingFactor"]
         residual_quantization = config["residual_quantization"]
@@ -161,7 +161,7 @@ class TestSuite(common.TestSuite):
         spherical_bool = "true" if distance in ("ip", "cos") else "false"
 
         self.debug_log(
-            f"workers: {workers}, lists: {lists}, sampling_factor: {sampling_factor}, "
+            f"pg_parallel_workers: {pg_parallel_workers}, lists: {lists}, sampling_factor: {sampling_factor}, "
             f"batch_size: {batch_size}, distance: {distance}, "
             f"spherical_centroids: {spherical_bool}, residual_quantization: {residual_quantization}"
         )
@@ -172,8 +172,8 @@ class TestSuite(common.TestSuite):
         conn.add_notice_handler(self.make_handler(suite_name))
         start_time = time.perf_counter()
 
-        conn.execute(f"SET max_parallel_maintenance_workers TO {workers}")
-        conn.execute(f"SET max_parallel_workers TO {workers}")
+        conn.execute(f"SET max_parallel_maintenance_workers TO {pg_parallel_workers}")
+        conn.execute(f"SET max_parallel_workers TO {pg_parallel_workers}")
 
         conn.execute(
             f"""

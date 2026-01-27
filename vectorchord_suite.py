@@ -133,7 +133,7 @@ class TestSuite(common.TestSuite):
 
         # Load configuration
         config = self.config[suite_name]
-        workers = config["workers"]
+        pg_parallel_workers = config["pg_parallel_workers"]
         lists = config["lists"]
         build_threads = config.get("build_threads", 1)
         kmeans_hierarchical = config["kmeans_hierarchical"]
@@ -143,7 +143,7 @@ class TestSuite(common.TestSuite):
         metric = dataset["metric"]
 
         self.debug_log(
-            f"Index config: workers={workers}, lists={lists}, build_threads={build_threads}, "
+            f"Index config: pg_parallel_workers={pg_parallel_workers}, lists={lists}, build_threads={build_threads}, "
             f"kmeans_hierarchical={kmeans_hierarchical}, sampling_factor={sampling_factor}, "
             f"metric={metric}, residual_quantization={residual_quantization}"
         )
@@ -166,8 +166,8 @@ class TestSuite(common.TestSuite):
         conn = self.create_connection()
         start_time = time.perf_counter()
 
-        conn.execute(f"SET max_parallel_maintenance_workers TO {workers}")
-        conn.execute(f"SET max_parallel_workers TO {workers}")
+        conn.execute(f"SET max_parallel_maintenance_workers TO {pg_parallel_workers}")
+        conn.execute(f"SET max_parallel_workers TO {pg_parallel_workers}")
         conn.execute(
             f"CREATE INDEX {table_name}_embedding_idx ON {table_name} "
             f"USING vchordrq (embedding {metric_ops}) WITH (options = $${ivf_config}$$)"

@@ -6,7 +6,7 @@ pgpu-laion-400m-160000-test-ip:
   lists: [400, 160000]
   samplingFact or: 256
   batchSize: 1000000
-  workers: 32
+  pg_parallel_workers: 32
   top: 10
   residual_quantization: true
   random_sampling: False
