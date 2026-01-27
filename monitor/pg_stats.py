@@ -81,36 +81,88 @@ class PGStatsCollector:
                 }
         return {}
 
+    def _get_pg_version(self) -> int:
+        """Get PostgreSQL major version number."""
+        if not hasattr(self, '_pg_version'):
+            with self.conn.cursor() as cur:
+                cur.execute("SHOW server_version_num")
+                result = cur.fetchone()
+                # server_version_num is like 170000 for PG17, 160000 for PG16
+                self._pg_version = int(result[0]) // 10000 if result else 0
+        return self._pg_version
+
     def _get_bgwriter_stats(self) -> dict:
         """Get background writer and checkpoint statistics."""
-        with self.conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    checkpoints_timed,
-                    checkpoints_req,
-                    checkpoint_write_time,
-                    checkpoint_sync_time,
-                    buffers_checkpoint,
-                    buffers_clean,
-                    buffers_backend,
-                    buffers_backend_fsync,
-                    buffers_alloc
-                FROM pg_stat_bgwriter
-            """)
-            row = cur.fetchone()
-            if row:
-                return {
-                    "checkpoints_timed": row[0],
-                    "checkpoints_req": row[1],
-                    "checkpoint_write_time_ms": row[2],
-                    "checkpoint_sync_time_ms": row[3],
-                    "buffers_checkpoint": row[4],
-                    "buffers_clean": row[5],
-                    "buffers_backend": row[6],
-                    "buffers_backend_fsync": row[7],
-                    "buffers_alloc": row[8],
-                }
-        return {}
+        pg_version = self._get_pg_version()
+
+        result = {}
+
+        # Checkpoint stats moved to pg_stat_checkpointer in PG17
+        if pg_version >= 17:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        num_timed,
+                        num_requested,
+                        write_time,
+                        sync_time,
+                        buffers_written
+                    FROM pg_stat_checkpointer
+                """)
+                row = cur.fetchone()
+                if row:
+                    result.update({
+                        "checkpoints_timed": row[0],
+                        "checkpoints_req": row[1],
+                        "checkpoint_write_time_ms": row[2],
+                        "checkpoint_sync_time_ms": row[3],
+                        "buffers_checkpoint": row[4],
+                    })
+
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        buffers_clean,
+                        buffers_alloc
+                    FROM pg_stat_bgwriter
+                """)
+                row = cur.fetchone()
+                if row:
+                    result.update({
+                        "buffers_clean": row[0],
+                        "buffers_alloc": row[1],
+                    })
+        else:
+            # PG16 and earlier - all stats in pg_stat_bgwriter
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        checkpoints_timed,
+                        checkpoints_req,
+                        checkpoint_write_time,
+                        checkpoint_sync_time,
+                        buffers_checkpoint,
+                        buffers_clean,
+                        buffers_backend,
+                        buffers_backend_fsync,
+                        buffers_alloc
+                    FROM pg_stat_bgwriter
+                """)
+                row = cur.fetchone()
+                if row:
+                    result = {
+                        "checkpoints_timed": row[0],
+                        "checkpoints_req": row[1],
+                        "checkpoint_write_time_ms": row[2],
+                        "checkpoint_sync_time_ms": row[3],
+                        "buffers_checkpoint": row[4],
+                        "buffers_clean": row[5],
+                        "buffers_backend": row[6],
+                        "buffers_backend_fsync": row[7],
+                        "buffers_alloc": row[8],
+                    }
+
+        return result
 
     def _get_index_stats(self, table_name: str) -> dict:
         """Get statistics for the vector index on the specified table."""
