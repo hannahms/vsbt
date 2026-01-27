@@ -708,7 +708,7 @@ class TestSuite:
             print(f"    • PG Parallel Workers: {config.get('pg_parallel_workers')}")
             print(f"    • Metric:          {config.get('metric')}")
             print(f"    • Centroids Table: {self.centroids_table or 'None'}")
-            print(f"    • Benchmarks:      {len(config.get('benchmarks', {}))}")
+            print(f"    • Benchmarks to run: {len(config.get('benchmarks', {}))}")
             print()
 
         # Initialize system monitor only for local databases
