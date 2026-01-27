@@ -51,7 +51,6 @@ class ResultsManager:
                 "suite_name": suite_name,
                 "timestamp": self.timestamp,
                 "hostname": self.hostname,
-                "datetime": datetime.now().isoformat(),
             },
             "config": config,
             "results": results,
@@ -80,7 +79,6 @@ class ResultsManager:
         row = {
             "run_id": f"{suite_name}_{self.timestamp}",
             "timestamp": self.timestamp,
-            "datetime": datetime.now().isoformat(),
             "hostname": self.hostname,
             "suite_type": suite_type,
             "suite_name": suite_name,
