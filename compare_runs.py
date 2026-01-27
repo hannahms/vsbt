@@ -200,6 +200,175 @@ def compare_runs(results_dir: Path, run1_idx: int, run2_idx: int, output_format:
     print()
 
 
+def extract_suite_summary(data: dict) -> dict:
+    """Extract summary metrics from a run for cross-suite comparison."""
+    summary = {}
+
+    for suite_name, suite_data in data.items():
+        results = suite_data.get("results", suite_data)  # Handle both formats
+        benchmarks = results.get("benchmarks", suite_data.get("benchmarks", {}))
+
+        # Find best QPS at recall >= 95%
+        best_qps_95 = None
+        best_recall_95 = None
+        best_p50 = None
+        best_p99 = None
+
+        for bench_name, bench_data in benchmarks.items():
+            recall = bench_data.get("recall", 0)
+            qps = bench_data.get("qps", 0)
+            p50 = bench_data.get("p50_ms") or bench_data.get("p50_latency", 0)
+            p99 = bench_data.get("p99_ms") or bench_data.get("p99_latency", 0)
+
+            # Best QPS at recall >= 95%
+            if recall >= 0.95:
+                if best_qps_95 is None or qps > best_qps_95:
+                    best_qps_95 = qps
+                    best_recall_95 = recall
+
+            # Track best (lowest) latencies
+            if p50 and (best_p50 is None or p50 < best_p50):
+                best_p50 = p50
+            if p99 and (best_p99 is None or p99 < best_p99):
+                best_p99 = p99
+
+        summary[suite_name] = {
+            "suite_type": "pgvector" if "pgvector" in suite_name.lower() else
+                         "pgpu" if "pgpu" in suite_name.lower() else
+                         "vectorchord",
+            "index_build_time": results.get("index_build_time"),
+            "load_time": results.get("load_time"),
+            "index_size": results.get("index_size"),
+            "best_qps_95": best_qps_95,
+            "best_recall_95": best_recall_95,
+            "best_p50": best_p50,
+            "best_p99": best_p99,
+            "num_benchmarks": len(benchmarks),
+        }
+
+    return summary
+
+
+def compare_runs_cross_suite(results_dir: Path, run1_idx: int, run2_idx: int):
+    """Compare two runs from different suite types."""
+    run1_path = get_run_by_index(results_dir, run1_idx)
+    run2_path = get_run_by_index(results_dir, run2_idx)
+
+    if not run1_path:
+        print(f"Error: Run #{run1_idx} not found.")
+        return
+    if not run2_path:
+        print(f"Error: Run #{run2_idx} not found.")
+        return
+
+    data1 = load_raw_result(run1_path)
+    data2 = load_raw_result(run2_path)
+
+    summary1 = extract_suite_summary(data1)
+    summary2 = extract_suite_summary(data2)
+
+    suite1_name = list(summary1.keys())[0]
+    suite2_name = list(summary2.keys())[0]
+    s1 = summary1[suite1_name]
+    s2 = summary2[suite2_name]
+
+    print(f"\n{'=' * 70}")
+    print("CROSS-SUITE COMPARISON")
+    print(f"{'=' * 70}")
+    print(f"\n  Run A (#{run1_idx}): {suite1_name}")
+    print(f"  Run B (#{run2_idx}): {suite2_name}")
+    print()
+
+    # Build metrics comparison
+    print(f"{'─' * 70}")
+    print("BUILD METRICS")
+    print(f"{'─' * 70}")
+
+    rows = []
+
+    def fmt_time(val):
+        if val is None:
+            return "-"
+        return f"{val}s" if isinstance(val, (int, float)) else str(val)
+
+    def fmt_delta(val_a, val_b, lower_is_better=True):
+        if val_a is None or val_b is None:
+            return "-"
+        try:
+            a = float(str(val_a).replace('s', ''))
+            b = float(str(val_b).replace('s', ''))
+            if a == 0:
+                return "-"
+            pct = ((b - a) / a) * 100
+            if lower_is_better:
+                indicator = "+" if pct > 0 else ("-" if pct < 0 else "=")
+            else:
+                indicator = "-" if pct > 0 else ("+" if pct < 0 else "=")
+            return f"{indicator}{abs(pct):.1f}%"
+        except (ValueError, TypeError):
+            return "-"
+
+    rows.append({
+        "Metric": "Index Build Time",
+        "Run A": fmt_time(s1.get("index_build_time")),
+        "Run B": fmt_time(s2.get("index_build_time")),
+        "Δ": fmt_delta(s1.get("index_build_time"), s2.get("index_build_time"), lower_is_better=True),
+    })
+    rows.append({
+        "Metric": "Load Time",
+        "Run A": fmt_time(s1.get("load_time")),
+        "Run B": fmt_time(s2.get("load_time")),
+        "Δ": fmt_delta(s1.get("load_time"), s2.get("load_time"), lower_is_better=True),
+    })
+    rows.append({
+        "Metric": "Index Size",
+        "Run A": s1.get("index_size") or "-",
+        "Run B": s2.get("index_size") or "-",
+        "Δ": "-",
+    })
+
+    print(tabulate(rows, headers="keys", tablefmt="simple", showindex=False))
+    print()
+
+    # Query performance comparison
+    print(f"{'─' * 70}")
+    print("QUERY PERFORMANCE (best results)")
+    print(f"{'─' * 70}")
+
+    rows = []
+    rows.append({
+        "Metric": "Best QPS (recall≥95%)",
+        "Run A": f"{s1['best_qps_95']:.0f}" if s1.get("best_qps_95") else "-",
+        "Run B": f"{s2['best_qps_95']:.0f}" if s2.get("best_qps_95") else "-",
+        "Δ": fmt_delta(s1.get("best_qps_95"), s2.get("best_qps_95"), lower_is_better=False),
+    })
+    rows.append({
+        "Metric": "Recall at best QPS",
+        "Run A": f"{s1['best_recall_95']:.4f}" if s1.get("best_recall_95") else "-",
+        "Run B": f"{s2['best_recall_95']:.4f}" if s2.get("best_recall_95") else "-",
+        "Δ": "-",
+    })
+    rows.append({
+        "Metric": "Best P50 (ms)",
+        "Run A": f"{s1['best_p50']:.2f}" if s1.get("best_p50") else "-",
+        "Run B": f"{s2['best_p50']:.2f}" if s2.get("best_p50") else "-",
+        "Δ": fmt_delta(s1.get("best_p50"), s2.get("best_p50"), lower_is_better=True),
+    })
+    rows.append({
+        "Metric": "Best P99 (ms)",
+        "Run A": f"{s1['best_p99']:.2f}" if s1.get("best_p99") else "-",
+        "Run B": f"{s2['best_p99']:.2f}" if s2.get("best_p99") else "-",
+        "Δ": fmt_delta(s1.get("best_p99"), s2.get("best_p99"), lower_is_better=True),
+    })
+
+    print(tabulate(rows, headers="keys", tablefmt="simple", showindex=False))
+    print()
+
+    print(f"{'─' * 70}")
+    print("Note: + = improvement, - = regression")
+    print(f"{'=' * 70}\n")
+
+
 def show_run_details(results_dir: Path, run_idx: int):
     """Show detailed information about a specific run."""
     run_path = get_run_by_index(results_dir, run_idx)
@@ -254,8 +423,11 @@ Examples:
   # Show details for run #5
   python compare_runs.py --show 5
 
-  # Compare run #3 with run #7
+  # Compare run #3 with run #7 (same suite type)
   python compare_runs.py --compare 3 7
+
+  # Compare runs from different suites (pgvector vs vectorchord)
+  python compare_runs.py --cross-suite 3 7
 
   # Compare runs and output as CSV
   python compare_runs.py --compare 3 7 --format csv
@@ -284,7 +456,14 @@ Examples:
         type=int,
         nargs=2,
         metavar=("A", "B"),
-        help="Compare run #A with run #B"
+        help="Compare run #A with run #B (same suite type)"
+    )
+    parser.add_argument(
+        "--cross-suite", "-x",
+        type=int,
+        nargs=2,
+        metavar=("A", "B"),
+        help="Compare runs from different suite types (e.g., pgvector vs vectorchord)"
     )
     parser.add_argument(
         "--format", "-f",
@@ -305,6 +484,8 @@ Examples:
         show_run_details(args.results_dir, args.show)
     elif args.compare:
         compare_runs(args.results_dir, args.compare[0], args.compare[1], args.format)
+    elif args.cross_suite:
+        compare_runs_cross_suite(args.results_dir, args.cross_suite[0], args.cross_suite[1])
     else:
         parser.print_help()
 
