@@ -76,7 +76,7 @@ python <suite>.py -s config/<config>.yaml [options]
 | `--url` | PostgreSQL connection URL | `postgresql://postgres@localhost:5432/postgres` |
 | `--devices` | Block devices to monitor | `dm-0` |
 | `--chunk-size` | Chunk size for loading data | `1000000` |
-| `--num_processes` | Parallel query processes | `1` |
+| `--query-clients` | Number of parallel client sessions for querying | `1` |
 | `--max-load-threads` | Threads for loading embeddings | `4` |
 | `--skip-add-embeddings` | Skip data loading step | `false` |
 | `--skip-index-creation` | Skip index build step | `false` |
@@ -149,7 +149,7 @@ Run queries in parallel to measure throughput under load:
 
 ```bash
 python pgvector_suite.py -s config/pgvector_suite.yaml \
-    --num_processes 8 \
+    --query-clients 8 \
     --skip-add-embeddings \
     --skip-index-creation
 ```

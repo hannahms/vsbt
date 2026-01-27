@@ -317,7 +317,7 @@ def main():
         centroids=args.centroids_file,
         centroids_table=args.centroids_table,
         skip_index_creation=args.skip_index_creation,
-        num_processes=args.num_processes,
+        query_clients=args.query_clients,
         max_load_threads=args.max_load_threads,
         debug=args.debug,
         overwrite_table=args.overwrite_table,

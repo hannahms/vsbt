@@ -121,7 +121,9 @@ class TestSuite(common.TestSuite):
         else:
             raise ValueError
 
-        self.debug_log(f"metric_func: {metric_func}, workers: {workers}, m: {m}, ef_construction: {ef_construction}")
+        self.debug_log(
+            f"Index config: metric_func={metric_func}, workers={workers}, m={m}, ef_construction={ef_construction}"
+        )
 
         conn = self.create_connection()
         start_time = perf_counter()
@@ -136,7 +138,7 @@ class TestSuite(common.TestSuite):
         print(f'Index build time: {self.results[suite_name]["index_build_time"]}s')
 
         conn.close()
-        print(f"Index built successfully.")
+        print("Index built successfully.")
 
         event.set()
         index_monitor_thread.join()
@@ -153,7 +155,7 @@ class TestSuite(common.TestSuite):
         dataset: dict
     ) -> list[tuple[int, float]]:
         conn.execute(f"SET hnsw.ef_search={benchmark['efSearch']}")
-        print(f"ef_search: {benchmark['efSearch']}")
+        self.debug_log(f"ef_search: {benchmark['efSearch']}")
 
         self.prewarm_index(table_name)
 
@@ -166,12 +168,12 @@ class TestSuite(common.TestSuite):
         else:
             raise ValueError("unsupported metric type")
 
-        self.debug_log(f"metric_ops: {metric_ops}, dataset metric: {dataset['metric']}")
+        self.debug_log(f"Benchmark config: metric_ops={metric_ops}, dataset_metric={dataset['metric']}")
 
         return super().sequential_bench(name, table_name, conn, metric_ops, top, benchmark,dataset)
 
     def generate_markdown_result(self):
-        self.debug_log(self.results)
+        self.debug_log(f"Results: {self.results}")
         md_file = MdUtils(
             file_name="./results/benchmark_results", title="Benchmark Results",
         )
@@ -181,7 +183,7 @@ class TestSuite(common.TestSuite):
             "dataset",
             "workers",
             "metric",
-            "num_processes",
+            "query_clients",
             "m",
             "ef_construction",
             "ef_search",
@@ -206,7 +208,7 @@ class TestSuite(common.TestSuite):
                     self.config[suite_name]["dataset"],
                     self.config[suite_name]["workers"],
                     self.config[suite_name]["metric"],
-                    self.num_processes,
+                    self.query_clients,
                     self.config[suite_name]["m"],
                     self.config[suite_name]["efConstruction"],
                     benchmark["efSearch"],
@@ -233,13 +235,12 @@ class TestSuite(common.TestSuite):
 if __name__ == "__main__":
     parser = build_arg_parse()
     args = parser.parse_args()
-    print(args)
 
     test_suite = TestSuite(
         args.suite, args.url, args.devices,
         args.chunk_size, args.skip_add_embeddings,
         args.centroids_file, args.centroids_table,
-        args.skip_index_creation, args.num_processes,
+        args.skip_index_creation, args.query_clients,
         args.max_load_threads, args.debug, args.overwrite_table
     )
     test_suite.run()

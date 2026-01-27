@@ -82,9 +82,9 @@ def build_arg_parse(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--num_processes",
+        "--query-clients",
         type=int,
-        help="Number of processes for parallel benchmark",
+        help="Number of parallel client sessions for querying",
         default=1,
         required=False,
     )
@@ -165,7 +165,7 @@ def calculate_metrics(
     all_results,
     k,
     m,
-    num_processes,
+    query_clients,
 ) -> tuple[float, float, float, float]:
     """Calculate recall, QPS, and latency percentiles from results"""
     hits, latencies = zip(*all_results)
@@ -180,8 +180,8 @@ def calculate_metrics(
 
     total_hits = sum(hits)
 
-    recall = total_hits / (k * m * num_processes)
-    qps = (m * num_processes) / total_time
+    recall = total_hits / (k * m * query_clients)
+    qps = (m * query_clients) / total_time
 
     # Calculate latency percentiles (in milliseconds)
     latencies_ms = numpy.array(latencies) * 1000
@@ -205,7 +205,7 @@ class TestSuite:
                  centroids: str = None,
                  centroids_table: str = None,
                  skip_index_creation: bool = False,
-                 num_processes: int = 1,
+                 query_clients: int = 1,
                  max_load_threads: int = 4,
                  debug: bool = False,
                  overwrite_table: bool = False):
@@ -219,7 +219,7 @@ class TestSuite:
         self.centroids = centroids
         self.centroids_table = centroids_table
         self.results = {}
-        self.num_processes = num_processes
+        self.query_clients = query_clients
         self.max_load_threads = max_load_threads
         self.debug = debug
         self.overwrite_table = overwrite_table
@@ -563,33 +563,33 @@ class TestSuite:
             results.append((hit, query_time))
 
             curr_results = results[: i + 1]
-            curr_recall, curr_qps, curr_p50, _ = calculate_metrics(curr_results, top, i + 1, num_processes=1)
+            curr_recall, curr_qps, curr_p50, _ = calculate_metrics(curr_results, top, i + 1, query_clients=1)
             pbar.set_description(f"recall: {curr_recall:.4f} QPS: {curr_qps:.2f} P50: {curr_p50:.2f}ms")
 
         pbar.close()
         return results, metric_ops
 
-    def parallel_bench(self, name, table_name, dataset, metric_ops, top, num_processes, benchmark):
+    def parallel_bench(self, name, table_name, dataset, metric_ops, top, query_clients, benchmark):
         test = dataset["test"]
         answer = dataset["answer"]
         m = test.shape[0]
-        self.debug_log(f"Parallel benchmark with {m} queries using {num_processes} processes")
+        self.debug_log(f"Parallel benchmark with {m} queries using {query_clients} clients")
 
         batches = []
-        for _ in range(num_processes):
+        for _ in range(query_clients):
             batch = self.make_batch_args(test, answer, top, metric_ops, table_name, benchmark)
             batches.append(batch)
 
         self.prewarm_index(table_name)
 
-        with mp.Pool(processes=num_processes) as pool:
+        with mp.Pool(processes=query_clients) as pool:
             batch_results = list(pool.map(self.__class__.process_batch, batches))
 
         all_results = [result for batch in batch_results for result in batch]
         return all_results, metric_ops
 
     def run_benchmark(self, suite_name: str, name: str, table_name: str, result_dir: str, benchmark: dict,
-                      dataset: dict, num_processes):
+                      dataset: dict, query_clients):
         event = threading.Event()
         os_monitor_thread = threading.Thread(
             target=monitor.os_stats.monitor_and_generate_report,
@@ -601,10 +601,10 @@ class TestSuite:
         metric = self.config[suite_name]["metric"]
         m = dataset["test"].shape[0]
 
-        self.debug_log(f"Running benchmark with top={top}, metric_ops={metric} and num_processes={num_processes}")
+        self.debug_log(f"Running benchmark with top={top}, metric_ops={metric} and query_clients={query_clients}")
 
-        if num_processes > 1:
-            results, metric_ops = self.parallel_bench(suite_name, table_name, dataset, metric, top, num_processes,
+        if query_clients > 1:
+            results, metric_ops = self.parallel_bench(suite_name, table_name, dataset, metric, top, query_clients,
                                                       benchmark)
         else:
             conn = self.create_connection()
@@ -615,7 +615,7 @@ class TestSuite:
         event.set()
         os_monitor_thread.join()
 
-        recall, qps, p50, p99 = calculate_metrics(results, top, m, num_processes)
+        recall, qps, p50, p99 = calculate_metrics(results, top, m, query_clients)
         print(f"Top: {top} | Recall: {recall:.4f} | QPS: {qps:.2f} | P50: {p50:.2f}ms | P99: {p99:.2f}ms")
 
         self.results[suite_name][name] = {
@@ -625,13 +625,13 @@ class TestSuite:
             "p99_latency": p99,
         }
 
-    def run_benchmarks(self, suite_name: str, table_name: str, dataset: dict, num_processes):
+    def run_benchmarks(self, suite_name: str, table_name: str, dataset: dict, query_clients):
         for name, benchmark in self.config[suite_name]["benchmarks"].items():
             print(f"Running benchmark: {benchmark}")
             result_dir = f"./results/{suite_name}/"
             os.makedirs(result_dir, exist_ok=True)
             self.results[suite_name][name] = {}
-            self.run_benchmark(suite_name, name, table_name, result_dir, benchmark, dataset, num_processes)
+            self.run_benchmark(suite_name, name, table_name, result_dir, benchmark, dataset, query_clients)
 
     def generate_markdown_result(self):
         return NotImplementedError("generate_markdown_result method should be implemented in subclasses.")
@@ -679,7 +679,7 @@ class TestSuite:
         else:
             print("Skipping index creation as requested.")
 
-        self.run_benchmarks(name, table_name, ds, self.num_processes)
+        self.run_benchmarks(name, table_name, ds, self.query_clients)
 
     def run(self):
         os.makedirs("./results", exist_ok=True)

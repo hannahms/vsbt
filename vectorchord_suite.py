@@ -126,7 +126,11 @@ class TestSuite(common.TestSuite):
         sampling_factor = self.config[suite_name]["samplingFactor"]
         residual_quantization = self.config[suite_name]["residual_quantization"]
         metric = dataset["metric"]
-        self.debug_log(f"workers: {workers}, lists: {lists}, kmeans_hierarchical: {kmeans_hierarchical}, kmeans_dimension: {kmeans_dimension}, sampling_factor: {sampling_factor}, metric: {metric}, residual_quantization: {residual_quantization}, build_threads: {build_threads}")
+        self.debug_log(
+            f"Index config: workers={workers}, lists={lists}, build_threads={build_threads}, "
+            f"kmeans_hierarchical={kmeans_hierarchical}, kmeans_dimension={kmeans_dimension}, "
+            f"sampling_factor={sampling_factor}, metric={metric}, residual_quantization={residual_quantization}"
+        )
         self.results[suite_name]["lists"] = lists
         self.results[suite_name]["build_threads"] = build_threads
         metric_ops = self.metric_dict[metric]
@@ -147,8 +151,7 @@ class TestSuite(common.TestSuite):
             """
             ivf_config = "\n".join(
                 [config, external_centroids_cfg])
-            self.debug_log(f"external_centroids_cfg: {ivf_config}"
-                f"Index build options with centroids file: metric: {metric_ops}, ivf_config: {ivf_config}")
+            self.debug_log(f"Using external centroids file, metric={metric_ops}")
         elif self.centroids_table:
             # Case when centroids table is provided
             external_centroids_cfg = f"""
@@ -157,8 +160,7 @@ class TestSuite(common.TestSuite):
             """
             ivf_config = "\n".join(
                 [config, external_centroids_cfg])
-            self.debug_log(
-                f"Index build options with centroids table: metric: {metric_ops}, ivf_config: {ivf_config}")
+            self.debug_log(f"Using external centroids table={self.centroids_table}, metric={metric_ops}")
         # internal
         else:
             if metric == "l2" or metric == "euclidean":
@@ -186,8 +188,7 @@ class TestSuite(common.TestSuite):
 
             ivf_config = "\n".join(
                 [config, internal_centroids_cfg])
-            self.debug_log(
-                f"Index build options: metric: {metric_ops}, ivf_config: {ivf_config}")
+            self.debug_log(f"Using internal centroids, metric={metric_ops}")
 
         conn = self.create_connection()
 
@@ -203,6 +204,7 @@ class TestSuite(common.TestSuite):
 
         conn.execute("CHECKPOINT")
         conn.close()
+        print("Index built successfully.")
 
         event.set()
         index_monitor_thread.join()
@@ -234,12 +236,15 @@ class TestSuite(common.TestSuite):
         else:
             raise ValueError("unsupported metric type")
 
-        self.debug_log(f"metric: {dataset['metric']}, nprob: {benchmark['nprob']}, epsilon: {benchmark['epsilon']}, metric_ops: {metric_ops}")
+        self.debug_log(
+            f"Benchmark config: metric={dataset['metric']}, nprob={benchmark['nprob']}, "
+            f"epsilon={benchmark['epsilon']}, metric_ops={metric_ops}"
+        )
 
         return super().sequential_bench(name, table_name, conn, metric_ops, top, benchmark, dataset)
 
     def generate_markdown_result(self):
-        self.debug_log(self.results)
+        self.debug_log(f"Results: {self.results}")
         md_file = MdUtils(
             file_name="./results/benchmark_results", title="Benchmark Results",
         )
@@ -249,7 +254,7 @@ class TestSuite(common.TestSuite):
             "dataset",
             "workers",
             "metric",
-            "num_processes",
+            "query_clients",
             "lists",
             "sampling_factor",
             "nprob",
@@ -275,7 +280,7 @@ class TestSuite(common.TestSuite):
                     self.config[suite_name]["dataset"],
                     self.config[suite_name]["workers"],
                     self.config[suite_name]["metric"],
-                    self.num_processes,
+                    self.query_clients,
                     self.results[suite_name].get("lists", "N/A"),
                     self.config[suite_name]["samplingFactor"],
                     benchmark["nprob"],
@@ -304,13 +309,12 @@ class TestSuite(common.TestSuite):
 if __name__ == "__main__":
     parser = build_arg_parse()
     args = parser.parse_args()
-    print(args)
 
     test_suite = TestSuite(
         args.suite, args.url, args.devices,
         args.chunk_size, args.skip_add_embeddings,
         args.centroids_file, args.centroids_table,
-        args.skip_index_creation, args.num_processes,
+        args.skip_index_creation, args.query_clients,
         args.max_load_threads, args.debug, args.overwrite_table
     )
 
