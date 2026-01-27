@@ -64,17 +64,21 @@ class ResultsManager:
         for directory in [self.raw_dir, self.consolidated_dir, self.reports_dir, self.charts_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
-        self.timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         self.hostname = socket.gethostname()
+        self._current_run_id = None  # Set per-test in process_suite_results
+
+    def _generate_run_id(self) -> str:
+        """Generate a new run ID (timestamp) for a test."""
+        return datetime.now().strftime("%Y%m%d%H%M%S")
 
     def save_raw_results(self, test_name: str, config: dict, results: dict) -> Path:
         """Save raw results as JSON for a single run."""
-        filename = f"{test_name}_{self.timestamp}.json"
+        filename = f"{test_name}_{self._current_run_id}.json"
         filepath = self.raw_dir / filename
 
         raw_data = {
             "metadata": {
-                "run_id": self.timestamp,
+                "run_id": self._current_run_id,
                 "test_name": test_name,
                 "hostname": self.hostname,
             },
@@ -103,7 +107,7 @@ class ResultsManager:
 
         # Build row data
         row = {
-            "run_id": self.timestamp,
+            "run_id": self._current_run_id,
             "hostname": self.hostname,
             "suite_type": suite_type,
             "test_name": test_name,
@@ -574,6 +578,9 @@ class ResultsManager:
             system_dashboard_path: Path to system metrics dashboard image
         """
         for test_name, suite_config in config.items():
+            # Generate unique run_id for each test
+            self._current_run_id = self._generate_run_id()
+
             suite_results = results.get(test_name, {})
 
             # Save raw results
