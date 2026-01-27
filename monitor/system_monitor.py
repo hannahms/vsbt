@@ -298,7 +298,8 @@ class SystemMonitor:
         prev, prev_time = self._prev_disk_io
         elapsed = current_time - prev_time
 
-        if elapsed <= 0:
+        # Need at least 0.5 seconds for meaningful rate calculation
+        if elapsed < 0.5:
             return {
                 "read_iops": 0,
                 "write_iops": 0,
@@ -457,13 +458,29 @@ class SystemMonitor:
         return filepath
 
     def _add_phase_markers(self, ax):
-        """Add vertical lines for phase markers."""
-        colors = ["#e74c3c", "#3498db", "#2ecc71", "#9b59b6", "#f39c12"]
-        for i, (elapsed, phase) in enumerate(self.phase_markers):
-            color = colors[i % len(colors)]
+        """Add vertical lines for phase markers (only start markers, skip overlapping)."""
+        # Only show _start markers, and use cleaner names
+        phase_display = {
+            "load_start": "Load",
+            "index_start": "Index",
+            "benchmark_start": "Benchmark",
+        }
+        colors = {"load_start": "#3498db", "index_start": "#e74c3c", "benchmark_start": "#2ecc71"}
+
+        prev_elapsed = -999  # Track previous marker position
+        for elapsed, phase in self.phase_markers:
+            if phase not in phase_display:
+                continue  # Skip _end markers
+
+            # Skip if too close to previous marker (< 5 seconds apart)
+            if elapsed - prev_elapsed < 5:
+                continue
+
+            color = colors.get(phase, "#9b59b6")
             ax.axvline(x=elapsed, color=color, linestyle="--", alpha=0.7, linewidth=1)
-            ax.text(elapsed, ax.get_ylim()[1] * 0.95, f" {phase}",
+            ax.text(elapsed, ax.get_ylim()[1] * 0.95, f" {phase_display[phase]}",
                     rotation=90, va="top", ha="left", fontsize=8, color=color)
+            prev_elapsed = elapsed
 
     def get_summary_stats(self) -> dict:
         """Get summary statistics for the monitoring period."""
