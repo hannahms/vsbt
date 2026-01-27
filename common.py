@@ -565,7 +565,8 @@ class TestSuite:
         conn.execute("SET jit=false")
 
         results = []
-        pbar = tqdm(enumerate(dataset["test"]), total=m, ncols=80)
+        pbar = tqdm(enumerate(dataset["test"]), total=m, ncols=80,
+                    bar_format="{desc} {n}/{total}: {percentage:3.0f}%|{bar}|")
         for i, query in pbar:
             start = time.perf_counter()
             with conn.cursor() as cursor:
@@ -588,7 +589,8 @@ class TestSuite:
 
             curr_results = results[: i + 1]
             curr_recall, curr_qps, curr_p50, _ = calculate_metrics(curr_results, top, i + 1, query_clients=1)
-            pbar.set_description(f"recall: {curr_recall:.4f} QPS: {curr_qps:.2f} P50: {curr_p50:.2f}ms")
+            recall_color = "\033[92m" if curr_recall >= 0.95 else "\033[91m"
+            pbar.set_description(f"recall: {recall_color}{curr_recall:.4f}\033[0m QPS: {curr_qps:.2f} P50: {curr_p50:.2f}ms")
 
         pbar.close()
         return results, metric_ops
