@@ -13,27 +13,27 @@ DATA_DIR = "./datasets"
 DATASETS = {
     # --- Standard HDF5 Datasets ---
     "laion-1m-test-ip": {
-        "url": "https://myscale-datasets.s3.ap-southeast-1.amazonaws.com/laion-1m-test-ip.hdf5",
+        "url": "https://edb-vector-datasets.s3.amazonaws.com/laion-1m-test-ip.hdf5",
         "metric": "ip",
         "type": "hdf5"
     },
     "laion-5m-test-ip": {
-        "url": "https://myscale-datasets.s3.ap-southeast-1.amazonaws.com/laion-5m-test-ip.hdf5",
+        "url": "https://edb-vector-datasets.s3.amazonaws.com/laion-5m-test-ip.hdf5",
         "metric": "ip",
         "type": "hdf5"
     },
     "laion-20m-test-ip": {
-        "url": "https://myscale-datasets.s3.ap-southeast-1.amazonaws.com/laion-20m-test-ip.hdf5",
+        "url": "https://edb-vector-datasets.s3.amazonaws.com/laion-20m-test-ip.hdf5",
         "metric": "ip",
         "type": "hdf5"
     },
     "laion-100m-test-ip": {
-        "url": "https://myscale-datasets.s3.ap-southeast-1.amazonaws.com/laion-100m-test-ip.hdf5",
+        "url": "https://edb-vector-datasets.s3.amazonaws.com/laion-100m-test-ip.hdf5",
         "metric": "ip",
         "type": "hdf5"
     },
     "glove-test-cos": {
-        "url": "https://myscale-datasets.s3.ap-southeast-1.amazonaws.com/glove-test-cos.hdf5",
+        "url": "https://edb-vector-datasets.s3.amazonaws.com/glove-test-cos.hdf5",
         "metric": "cos",
         "type": "hdf5"
     },
