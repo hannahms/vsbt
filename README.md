@@ -14,10 +14,10 @@ A comprehensive benchmarking tool for PostgreSQL vector search extensions. Compa
 
 | Dataset | Vectors | Dimensions | Metric | Type |
 |---------|---------|------------|--------|------|
-| laion-1m-test-ip | 1M | 512 | Inner Product | HDF5 |
-| laion-5m-test-ip | 5M | 512 | Inner Product | HDF5 |
-| laion-20m-test-ip | 20M | 512 | Inner Product | HDF5 |
-| laion-100m-test-ip | 100M | 512 | Inner Product | HDF5 |
+| laion-1m-test-ip | 1M | 768 | Inner Product | HDF5 |
+| laion-5m-test-ip | 5M | 768 | Inner Product | HDF5 |
+| laion-20m-test-ip | 20M | 768 | Inner Product | HDF5 |
+| laion-100m-test-ip | 100M | 768 | Inner Product | HDF5 |
 | laion-400m-test-ip | 400M | 512 | Inner Product | NPY (multipart) |
 | deep1b-test-l2 | 1B | 96 | L2 | NPY (mmap) |
 | sift-128-euclidean | 1M | 128 | L2 | HDF5 |
