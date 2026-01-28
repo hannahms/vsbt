@@ -38,7 +38,7 @@ class TestSuite(common.TestSuite):
         conn = psycopg.connect(url)
         conn.execute(f"SET hnsw.ef_search={ef_search}")
 
-        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
+        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s::vector LIMIT {top}"
 
         results = []
         for query, ground_truth in zip(test, answer):

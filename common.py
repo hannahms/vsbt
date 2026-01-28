@@ -585,7 +585,7 @@ class TestSuite:
             answers_list = [a[:top].tolist() if hasattr(a, "tolist") else a[:top] for a in answers_list]
 
         # Build query template (psycopg3 handles prepared statement caching)
-        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
+        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s::vector LIMIT {top}"
 
         results = []
         pbar = tqdm(enumerate(dataset["test"]), total=m, ncols=80,

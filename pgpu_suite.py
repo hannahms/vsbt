@@ -41,7 +41,7 @@ class TestSuite(common.TestSuite):
         conn.execute(f'SET vchordrq.probes="{nprob}"')
         conn.execute(f"SET vchordrq.epsilon={epsilon}")
 
-        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
+        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s::vector LIMIT {top}"
 
         results = []
         for query, ground_truth in zip(test, answer):
