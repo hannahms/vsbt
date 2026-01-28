@@ -607,20 +607,24 @@ class TestSuite:
         query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
 
         results = []
-        pbar = tqdm(enumerate(dataset["test"]), total=m, ncols=80,
+        latencies = []  # Pre-allocate for efficiency
+
+        # Reuse single cursor to avoid creation overhead
+        cursor = conn.cursor()
+
+        pbar = tqdm(range(m), total=m, ncols=80,
                     bar_format="{desc} {n}/{total}: {percentage:3.0f}%|{bar}|")
-        for i, query in pbar:
-            # Use single query in debug mode
-            if self.debug_single_query:
-                query = single_query
+        for i in pbar:
+            # Get query
+            query = single_query if self.debug_single_query else dataset["test"][i]
 
             start = time.perf_counter()
-            with conn.cursor() as cursor:
-                cursor.execute(query_sql, (query,))
-                result = cursor.fetchall()
+            cursor.execute(query_sql, (query,))
+            result = cursor.fetchall()
             end = time.perf_counter()
 
             query_time = end - start
+            latencies.append(query_time)
 
             if self.debug_single_query:
                 answers = single_answer
@@ -633,11 +637,16 @@ class TestSuite:
             hit = len({p[0] for p in result[:top]} & set(answers))
             results.append((hit, query_time))
 
-            curr_results = results[: i + 1]
-            curr_recall, curr_qps, curr_p50, _ = calculate_metrics(curr_results, top, i + 1, query_clients=1)
-            recall_color = "\033[92m" if curr_recall >= 0.95 else "\033[91m"
-            pbar.set_description(f"recall: {recall_color}{curr_recall:.4f}\033[0m QPS: {curr_qps:.2f} P50: {curr_p50:.2f}ms")
+            # Update stats every 50 iterations to reduce overhead
+            if (i + 1) % 50 == 0 or i == m - 1:
+                curr_recall = sum(r[0] for r in results) / (top * (i + 1))
+                total_time = sum(latencies)
+                curr_qps = (i + 1) / total_time
+                curr_p50 = np.percentile(latencies, 50) * 1000
+                recall_color = "\033[92m" if curr_recall >= 0.95 else "\033[91m"
+                pbar.set_description(f"recall: {recall_color}{curr_recall:.4f}\033[0m QPS: {curr_qps:.2f} P50: {curr_p50:.2f}ms")
 
+        cursor.close()
         pbar.close()
         return results, metric_ops
 
