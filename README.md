@@ -74,7 +74,7 @@ python <suite>.py -s config/<config>.yaml [options]
 |--------|-------------|---------|
 | `-s, --suite` | YAML configuration file (required) | - |
 | `--url` | PostgreSQL connection URL | `postgresql://postgres@localhost:5432/postgres` |
-| `--devices` | Block devices to monitor | `dm-0` |
+| `--devices` | Block devices to monitor | Auto-detected |
 | `--chunk-size` | Chunk size for loading data | `1000000` |
 | `--query-clients` | Number of parallel client sessions for querying | `1` |
 | `--max-load-threads` | Threads for loading embeddings | `4` |
@@ -90,7 +90,6 @@ python <suite>.py -s config/<config>.yaml [options]
 # Run with default 5M dataset configuration
 python pgvector_suite.py -s config/pgvector_suite.yaml \
     --url "postgresql://postgres@localhost:5432/postgres" \
-    --devices nvme0n1
 
 # Skip loading if data already exists
 python pgvector_suite.py -s config/pgvector_suite.yaml \
@@ -104,7 +103,6 @@ python pgvector_suite.py -s config/pgvector_suite.yaml \
 # Run 5M dataset benchmark
 python vectorchord_suite.py -s config/vectorchord_suite.yaml \
     --url "postgresql://postgres@localhost:5432/postgres" \
-    --devices nvme0n1
 
 # Run 100M dataset benchmark
 python vectorchord_suite.py -s config/vectorchord_suite_100m.yaml \
@@ -121,7 +119,6 @@ python vectorchord_suite.py -s config/vectorchord_suite_1B.yaml \
 # Run GPU-accelerated index build
 python pgpu_suite.py -s config/pgpu_suite.yaml \
     --url "postgresql://postgres@localhost:5432/postgres" \
-    --devices nvme0n1
 
 # Run with 100M dataset
 python pgpu_suite.py -s config/pgpu_suite_100m.yaml \
