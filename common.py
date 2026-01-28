@@ -114,6 +114,14 @@ def build_arg_parse(parser: argparse.ArgumentParser):
         required=False,
     )
 
+    parser.add_argument(
+        "--debug-single-query",
+        help="Debug mode: repeat the same query to diagnose latency degradation",
+        action="store_true",
+        default=False,
+        required=False,
+    )
+
 def get_keepalive_kwargs() -> dict:
     """Get keepalive arguments for the database connection."""
 
@@ -209,7 +217,8 @@ class TestSuite:
                  query_clients: int = 1,
                  max_load_threads: int = 4,
                  debug: bool = False,
-                 overwrite_table: bool = False):
+                 overwrite_table: bool = False,
+                 debug_single_query: bool = False):
         self.suite_file = suite_file
         self.config = load_suite_config(suite_file)
         self.url = url
@@ -224,6 +233,7 @@ class TestSuite:
         self.max_load_threads = max_load_threads
         self.debug = debug
         self.overwrite_table = overwrite_table
+        self.debug_single_query = debug_single_query
 
         # Check if database is local or remote
         self.is_local_db = is_local_database(url)
@@ -576,8 +586,17 @@ class TestSuite:
     def sequential_bench(self, name: str, table_name: str, conn: psycopg.Connection, metric_ops: str, top: int,
                          benchmark: dict, dataset: dict) -> tuple[list[tuple[int, float]], str]:
         m = dataset["test"].shape[0]
-        print(f"Running sequential benchmark with {m} queries")
         conn.execute("SET jit=false")
+
+        # Debug mode: use single repeated query to diagnose latency degradation
+        if self.debug_single_query:
+            print(f"Running DEBUG single-query benchmark ({m} iterations of same query)")
+            single_query = dataset["test"][0]
+            single_answer = dataset["answer"][0][:top]
+            if hasattr(single_answer, "tolist"):
+                single_answer = single_answer.tolist()
+        else:
+            print(f"Running sequential benchmark with {m} queries")
 
         # Pre-convert answers if numpy
         answers_list = dataset["answer"]
@@ -591,6 +610,10 @@ class TestSuite:
         pbar = tqdm(enumerate(dataset["test"]), total=m, ncols=80,
                     bar_format="{desc} {n}/{total}: {percentage:3.0f}%|{bar}|")
         for i, query in pbar:
+            # Use single query in debug mode
+            if self.debug_single_query:
+                query = single_query
+
             start = time.perf_counter()
             with conn.cursor() as cursor:
                 cursor.execute(query_sql, (query,))
@@ -598,9 +621,13 @@ class TestSuite:
             end = time.perf_counter()
 
             query_time = end - start
-            answers = answers_list[i] if isinstance(answers_list, list) else answers_list[i][:top]
-            if hasattr(answers, "tolist"):
-                answers = answers.tolist()
+
+            if self.debug_single_query:
+                answers = single_answer
+            else:
+                answers = answers_list[i] if isinstance(answers_list, list) else answers_list[i][:top]
+                if hasattr(answers, "tolist"):
+                    answers = answers.tolist()
 
             # Simple set intersection for Recall
             hit = len({p[0] for p in result[:top]} & set(answers))

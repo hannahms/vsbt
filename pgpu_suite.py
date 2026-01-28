@@ -275,6 +275,7 @@ def main():
         max_load_threads=args.max_load_threads,
         debug=args.debug,
         overwrite_table=args.overwrite_table,
+        debug_single_query=args.debug_single_query,
     )
 
     test_suite.run()
