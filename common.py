@@ -504,16 +504,25 @@ class TestSuite:
         with conn.cursor() as acur:
             blocks_total = 0
             phase = "initializing"
-            while blocks_total == 0:
-                time.sleep(0.5)
+
+            # Wait briefly for progress info, but don't block forever
+            for _ in range(10):  # Try for 5 seconds
+                if event.is_set():
+                    conn.close()
+                    return
                 acur.execute("SELECT blocks_total, phase FROM pg_stat_progress_create_index")
                 result = acur.fetchone()
                 if result:
                     blocks_total = result[0] or 0
                     phase = result[1] or "initializing"
+                    if blocks_total > 0:
+                        break
+                time.sleep(0.5)
 
-            pbar = tqdm(smoothing=0.0, total=blocks_total, desc=f"Building index ({phase})", ncols=100,
+            # Show progress bar even if blocks_total is 0 (e.g., during clustering)
+            pbar = tqdm(smoothing=0.0, total=max(blocks_total, 1), desc=f"Building index ({phase})", ncols=100,
                         bar_format="{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]")
+
             while True:
                 if event.is_set():
                     pbar.update(pbar.total - pbar.n)
@@ -524,15 +533,22 @@ class TestSuite:
                 result = acur.fetchone()
                 if result:
                     blocks_done = result[0] or 0
-                    new_total = result[1] or blocks_total
-                    phase = result[2] or phase
-                    # Update total if phase changed
-                    if new_total != pbar.total:
+                    new_total = result[1] or 0
+                    new_phase = result[2] or phase
+
+                    # Update phase description
+                    if new_phase != phase:
+                        phase = new_phase
+                        pbar.set_description(f"Building index ({phase})")
+
+                    # Update total if it changed and is non-zero
+                    if new_total > 0 and new_total != pbar.total:
                         pbar.total = new_total
                         pbar.n = 0
                         pbar.refresh()
-                    pbar.set_description(f"Building index ({phase})")
-                    pbar.update(max(blocks_done - pbar.n, 0))
+
+                    if new_total > 0:
+                        pbar.update(max(blocks_done - pbar.n, 0))
                 time.sleep(0.5)
 
     def create_index(self, suite_name: str, table_name: str, dataset: dict) -> tuple[
