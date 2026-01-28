@@ -31,14 +31,10 @@ Datasets are automatically downloaded on first use.
 
 - Python 3.10+
 - PostgreSQL 15+ with one of the supported extensions installed
-- `iostat` for system monitoring (Linux)
 
 ### Install Dependencies
 
 ```bash
-# Install system dependencies (Linux)
-sudo apt-get install nvme-cli sysstat
-
 # Install Python dependencies
 pip install -r requirements.txt
 ```
@@ -100,9 +96,9 @@ python pgvector_suite.py -s config/pgvector_suite.yaml \
 ### Running VectorChord Benchmarks
 
 ```bash
-# Run 5M dataset benchmark
-python vectorchord_suite.py -s config/vectorchord_suite.yaml \
-    --url "postgresql://postgres@localhost:5432/postgres" \
+# Run 20M dataset benchmark
+python vectorchord_suite.py -s config/vectorchord_suite_20m.yaml \
+    --url "postgresql://postgres@localhost:5432/postgres"
 
 # Run 100M dataset benchmark
 python vectorchord_suite.py -s config/vectorchord_suite_100m.yaml \
@@ -116,9 +112,9 @@ python vectorchord_suite.py -s config/vectorchord_suite_1B.yaml \
 ### Running PGPU (GPU-Accelerated) Benchmarks
 
 ```bash
-# Run GPU-accelerated index build
-python pgpu_suite.py -s config/pgpu_suite.yaml \
-    --url "postgresql://postgres@localhost:5432/postgres" \
+# Run GPU-accelerated index build with 5M dataset
+python pgpu_suite.py -s config/pgpu_suite_5m.yaml \
+    --url "postgresql://postgres@localhost:5432/postgres"
 
 # Run with 100M dataset
 python pgpu_suite.py -s config/pgpu_suite_100m.yaml \
@@ -131,13 +127,13 @@ For VectorChord and PGPU, you can provide pre-computed centroids:
 
 ```bash
 # Using a centroids file
-python vectorchord_suite.py -s config/vectorchord_suite.yaml \
-    -c centroids.npy \
+python vectorchord_suite.py -s config/vectorchord_suite_100m.yaml \
+    --centroids-file centroids.npy \
     --url "postgresql://postgres@localhost:5432/postgres"
 
 # Using an existing centroids table
-python vectorchord_suite.py -s config/vectorchord_suite.yaml \
-    -ct public.my_centroids \
+python vectorchord_suite.py -s config/vectorchord_suite_100m.yaml \
+    --centroids-table public.my_centroids \
     --url "postgresql://postgres@localhost:5432/postgres"
 ```
 
@@ -283,15 +279,6 @@ python compare_runs.py --compare 3 7
 python compare_runs.py --compare 3 7 --format csv
 ```
 
-### Reduce Free Memory
-
-Simulate memory-constrained environments:
-
-```bash
-# Leave only 32GB of free memory
-sudo ./reduce_free_memory.sh 32
-```
-
 ### Convert Deep1B Dataset
 
 Convert Deep1B binary files to NPY format:
@@ -324,16 +311,14 @@ vector-search/
 ├── requirements.txt          # Python dependencies
 ├── config/                   # Benchmark configurations
 │   ├── pgvector_suite.yaml
-│   ├── vectorchord_suite.yaml
+│   ├── pgpu_suite_5m.yaml
+│   ├── pgpu_suite_100m.yaml
 │   ├── vectorchord_suite_100m.yaml
 │   ├── vectorchord_suite_1B.yaml
-│   ├── pgpu_suite.yaml
-│   ├── pgpu_suite_100m.yaml
 │   └── ...
 ├── monitor/
 │   ├── __init__.py           # Monitor package
-│   ├── os_stats.py           # Legacy OS monitoring
-│   ├── system_monitor.py     # Portable system metrics (psutil)
+│   ├── system_monitor.py     # System metrics (psutil-based)
 │   └── pg_stats.py           # PostgreSQL statistics collector
 ├── utils/
 │   ├── convert_deep1b.py     # Deep1B format converter
