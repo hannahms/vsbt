@@ -1,17 +1,15 @@
-pgpu-laion-400m-160000-test-ip:
-  dataset: laion-400m-test-ip
-  datasetType: npy
+vc-laion-20m-35000-test-ip:
+  dataset: laion-20m-test-ip
+  datasetType: hdf5
   metric: dot
-  samplingFactor: 256
-  lists: [400, 160000]
-  samplingFact or: 256
+  samplingFactor: 256 # Note: these are the settings to be reduced for faster execution on CPU
+  kmeans_dimension: 768 # Note: these are the settings to be reduced for faster execution on CPU
+  lists: [190, 35000]
   batchSize: 1000000
-  workers: 32
-  top: 10
   residual_quantization: true
-  random_sampling: False
-  kmeans_n_redo: 1
-  kmeans_n_iter: 30
+  kmeans_hierarchical: true
+  pg_parallel_workers: 32
+  top: 10
   benchmarks:
     10-20-1.0:
       nprob: 10,20

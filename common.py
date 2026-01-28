@@ -1,24 +1,24 @@
 import argparse
-from multiprocessing.util import debug
-
-import yaml
-import psycopg
-import pgvector
-import os
-import h5py
-import time
-import threading
-import numpy
 import gc
-import psutil
-import numpy as np
 import multiprocessing as mp
+import os
+import threading
 import time
 
+import numpy as np
+import psutil
+import psycopg
+import yaml
 from tqdm import tqdm
 
 import datasets
-import monitor.os_stats
+from monitor import (
+    SystemMonitor,
+    PGStatsCollector,
+    generate_system_report,
+    is_local_database,
+    detect_pg_io_device,
+)
 
 
 def build_arg_parse(parser: argparse.ArgumentParser):
@@ -41,8 +41,8 @@ def build_arg_parse(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--devices",
         nargs='+',
-        help='Block devices to be monitored',
-        default=["dm-0"],
+        help='Block devices to be monitored (auto-detected if not specified)',
+        default=None,
     )
 
     parser.add_argument(
@@ -60,7 +60,7 @@ def build_arg_parse(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "-ct", "--centroids_table",
+        "-ct", "--centroids-table",
         help="Centroids table name",
         type=str,
         required=False,
@@ -82,9 +82,9 @@ def build_arg_parse(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
-        "--num_processes",
+        "--query-clients",
         type=int,
-        help="Number of processes for parallel benchmark",
+        help="Number of parallel client sessions for querying",
         default=1,
         required=False,
     )
@@ -108,6 +108,14 @@ def build_arg_parse(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--overwrite-table",
         help="Overwrite existing table when adding embeddings",
+        action="store_true",
+        default=False,
+        required=False,
+    )
+
+    parser.add_argument(
+        "--debug-single-query",
+        help="Debug mode: repeat the same query to diagnose latency degradation",
         action="store_true",
         default=False,
         required=False,
@@ -137,10 +145,6 @@ def load_suite_config(suite_file: str) -> dict:
 
     return config
 
-def print_memory_usage(stage):
-    process = psutil.Process(os.getpid())
-    print(f"{stage} memory: {process.memory_info().rss / 1024 ** 2:.2f} MB")
-
 def calculate_coverage(time_intervals):
     if not time_intervals:
         return 0
@@ -165,7 +169,7 @@ def calculate_metrics(
     all_results,
     k,
     m,
-    num_processes,
+    query_clients,
 ) -> tuple[float, float, float, float]:
     """Calculate recall, QPS, and latency percentiles from results"""
     hits, latencies = zip(*all_results)
@@ -180,13 +184,13 @@ def calculate_metrics(
 
     total_hits = sum(hits)
 
-    recall = total_hits / (k * m * num_processes)
-    qps = (m * num_processes) / total_time
+    recall = total_hits / (k * m * query_clients)
+    qps = (m * query_clients) / total_time
 
     # Calculate latency percentiles (in milliseconds)
-    latencies_ms = numpy.array(latencies) * 1000
-    p50 = numpy.percentile(latencies_ms, 50)
-    p99 = numpy.percentile(latencies_ms, 99)
+    latencies_ms = np.array(latencies) * 1000
+    p50 = np.percentile(latencies_ms, 50)
+    p99 = np.percentile(latencies_ms, 99)
 
     return recall, qps, p50, p99
 
@@ -205,10 +209,11 @@ class TestSuite:
                  centroids: str = None,
                  centroids_table: str = None,
                  skip_index_creation: bool = False,
-                 num_processes: int = 1,
+                 query_clients: int = 1,
                  max_load_threads: int = 4,
                  debug: bool = False,
-                 overwrite_table: bool = False):
+                 overwrite_table: bool = False,
+                 debug_single_query: bool = False):
         self.suite_file = suite_file
         self.config = load_suite_config(suite_file)
         self.url = url
@@ -219,10 +224,21 @@ class TestSuite:
         self.centroids = centroids
         self.centroids_table = centroids_table
         self.results = {}
-        self.num_processes = num_processes
+        self.query_clients = query_clients
         self.max_load_threads = max_load_threads
         self.debug = debug
         self.overwrite_table = overwrite_table
+        self.debug_single_query = debug_single_query
+
+        # Check if database is local or remote
+        self.is_local_db = is_local_database(url)
+        if not self.is_local_db:
+            print(f"Remote database detected. System monitoring will be skipped.")
+            print(f"PostgreSQL statistics will still be collected.")
+
+        # Monitors (initialized per suite)
+        self.system_monitor = None
+        self.pg_stats_collector = None
 
     def debug_log(self, msg):
         if self.debug:
@@ -248,15 +264,21 @@ class TestSuite:
     def prewarm_index(self, table_name: str):
         raise NotImplementedError("prewarm_index should be implemented in subclasses.")
 
-    # --- REMOVED OBSOLETE get_hdf5_dataset and get_npy_dataset ---
-
-    def add_embeddings_from_hdf5(self, suite_name, name, train, workers):
+    def add_embeddings_from_hdf5(self, suite_name, name, train, pg_parallel_workers):
         """Parallel add embeddings to the database from HDF5."""
         n, dim = train.shape
         start_time = time.perf_counter()
 
         conn = self.create_connection()
-        self.debug_log(f'Table_name: {name}, num: {n}, dim: {dim}, overwrite: {self.overwrite_table}')
+        if self.debug:
+            print(f"\n📦 Load Configuration (HDF5):")
+            print(f"    • Table:           {name}")
+            print(f"    • Rows:            {n:,}")
+            print(f"    • Dimensions:      {dim}")
+            print(f"    • Load Threads:    {self.max_load_threads}")
+            print(f"    • Chunk Size:      {self.chunk_size:,}")
+            print(f"    • Overwrite:       {self.overwrite_table}")
+            print()
 
         if self.overwrite_table:
             print(f"Dropping existing table {name}...", end="", flush=True)
@@ -275,7 +297,7 @@ class TestSuite:
             return
 
         conn.execute(f"CREATE TABLE {name} (id integer, embedding vector({dim}))")
-        conn.execute(f"ALTER TABLE {name} SET (parallel_workers = {workers})")
+        conn.execute(f"ALTER TABLE {name} SET (parallel_workers = {pg_parallel_workers})")
         conn.close()
 
         max_load_threads = self.max_load_threads
@@ -294,7 +316,7 @@ class TestSuite:
             conn.close()
 
         chunk_size = self.chunk_size
-        pbar = tqdm(desc="Adding embeddings", total=n)
+        pbar = tqdm(desc="Adding embeddings", total=n, ncols=80, unit_scale=True, unit="rows")
         threads = []
         for i in range(0, n, chunk_size):
             chunk_start = i
@@ -367,8 +389,8 @@ class TestSuite:
                 chunk_data = data[chunk_start: chunk_start + chunk_len]
 
                 # Cast if needed
-                if chunk_data.dtype != numpy.float32:
-                    chunk_data = chunk_data.astype(numpy.float32)
+                if chunk_data.dtype != np.float32:
+                    chunk_data = chunk_data.astype(np.float32)
 
                 with t_conn.cursor().copy(
                         f"COPY {name} (id, embedding) FROM STDIN WITH (FORMAT BINARY)"
@@ -382,23 +404,26 @@ class TestSuite:
                 t_conn.close()
 
             # Initialize Progress Bar in "rows"
-            pbar = tqdm(desc="Adding embeddings", total=n, unit="rows")
+            pbar = tqdm(desc="Adding embeddings", total=n, unit="rows", ncols=80, unit_scale=True)
 
             if num_threads > 1: # Careful with python GIL and I/O bound
                 print(f"Parallel load enabled for {name}. Threads: {num_threads}")
                 threads = []
+                batch_rows = 0
                 for i in range(0, n, chunk_size):
                     chunk_len = min(chunk_size, n - i)
                     t = threading.Thread(target=load_chunk, args=(i, chunk_len))
                     threads.append(t)
+                    batch_rows += chunk_len
 
                     if len(threads) >= num_threads or (i + chunk_len) >= n:
                         for thread in threads:
                             thread.start()
                         for thread in threads:
                             thread.join()
-                            pbar.update(chunk_len * len(threads))
+                        pbar.update(batch_rows)
                         threads = []
+                        batch_rows = 0
             else:
                 print(f"Sequential load enabled for {name} (Optimized Mmap)")
                 for i in range(0, n, chunk_size):
@@ -413,14 +438,14 @@ class TestSuite:
             print(f"Sequential load for {name} (Generator source)")
             conn = self.create_connection()
             # Initialize Pbar for generator
-            pbar = tqdm(desc="Adding embeddings", total=n, unit="rows")
+            pbar = tqdm(desc="Adding embeddings", total=n, unit="rows", ncols=80, unit_scale=True)
 
             with conn.cursor().copy(
                     f"COPY {name} (id, embedding) FROM STDIN WITH (FORMAT BINARY)"
             ) as copy:
                 copy.set_types(["integer", "vector"])
                 for i, vec in data:
-                    copy.write_row((i, vec.astype(numpy.float16)))
+                    copy.write_row((i, vec))
                     while conn.pgconn.flush() == 1:
                         time.sleep(0)
                     pbar.update(1)
@@ -433,7 +458,7 @@ class TestSuite:
 
     def add_centroids_to_table(self, centroids_file: str, table_name: str = "public.centroids"):
         # Load centroids from the .npy file
-        centroids = numpy.load(centroids_file)
+        centroids = np.load(centroids_file)
         if centroids.ndim != 2:
             raise ValueError("Centroids file must contain a 2D array.")
 
@@ -472,27 +497,56 @@ class TestSuite:
         conn = self.create_connection()
         with conn.cursor() as acur:
             blocks_total = 0
-            while blocks_total == 0:
-                time.sleep(0.5)
-                acur.execute("SELECT blocks_total FROM pg_stat_progress_create_index")
-                result = acur.fetchone()
-                blocks_total = result[0] if result else 0
+            phase = "initializing"
 
-            pbar = tqdm(smoothing=0.0, total=blocks_total, desc="Building index", dynamic_ncols=True)
+            # Wait briefly for progress info, but don't block forever
+            for _ in range(10):  # Try for 5 seconds
+                if event.is_set():
+                    conn.close()
+                    return
+                acur.execute("SELECT blocks_total, phase FROM pg_stat_progress_create_index")
+                result = acur.fetchone()
+                if result:
+                    blocks_total = result[0] or 0
+                    phase = result[1] or "initializing"
+                    if blocks_total > 0:
+                        break
+                time.sleep(0.5)
+
+            # Show progress bar even if blocks_total is 0 (e.g., during clustering)
+            pbar = tqdm(smoothing=0.0, total=max(blocks_total, 1), desc=f"Building index ({phase})", ncols=100,
+                        bar_format="{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]")
+
             while True:
                 if event.is_set():
                     pbar.update(pbar.total - pbar.n)
                     pbar.close()
                     conn.close()
                     break
-                acur.execute("SELECT blocks_done FROM pg_stat_progress_create_index")
+                acur.execute("SELECT blocks_done, blocks_total, phase FROM pg_stat_progress_create_index")
                 result = acur.fetchone()
-                blocks_done = result[0] if result else 0
-                pbar.update(max(blocks_done - pbar.n, 0))
+                if result:
+                    blocks_done = result[0] or 0
+                    new_total = result[1] or 0
+                    new_phase = result[2] or phase
+
+                    # Update phase description
+                    if new_phase != phase:
+                        phase = new_phase
+                        pbar.set_description(f"Building index ({phase})")
+
+                    # Update total if it changed and is non-zero
+                    if new_total > 0 and new_total != pbar.total:
+                        pbar.total = new_total
+                        pbar.n = 0
+                        pbar.refresh()
+
+                    if new_total > 0:
+                        pbar.update(max(blocks_done - pbar.n, 0))
                 time.sleep(0.5)
 
     def create_index(self, suite_name: str, table_name: str, dataset: dict) -> tuple[
-        threading.Event, threading.Thread, threading.Thread]:
+        threading.Event, threading.Thread]:
         os.makedirs(f"./results/{suite_name}/index_build", exist_ok=True)
         conn = self.create_connection()
         print(f"Dropping index {table_name}_embedding_idx...", end="", flush=True)
@@ -505,11 +559,6 @@ class TestSuite:
             conn.close()
 
         event = threading.Event()
-        os_monitor_thread = threading.Thread(
-            target=monitor.os_stats.monitor_and_generate_report,
-            args=(f"./results/{suite_name}/index_build", self.devices, event),
-        )
-        os_monitor_thread.start()
 
         index_monitor_thread = threading.Thread(
             target=self.monitor_index_build,
@@ -517,7 +566,7 @@ class TestSuite:
         )
         index_monitor_thread.start()
 
-        return event, os_monitor_thread, index_monitor_thread
+        return event, index_monitor_thread
 
     def calculate_index_size(self, suite_name: str, table_name: str):
         conn = self.create_connection()
@@ -537,74 +586,129 @@ class TestSuite:
     def sequential_bench(self, name: str, table_name: str, conn: psycopg.Connection, metric_ops: str, top: int,
                          benchmark: dict, dataset: dict) -> tuple[list[tuple[int, float]], str]:
         m = dataset["test"].shape[0]
-        print(f"Running sequential benchmark with {m} queries")
         conn.execute("SET jit=false")
 
+        # Debug mode: use single repeated query to diagnose latency degradation
+        if self.debug_single_query:
+            print(f"Running DEBUG single-query benchmark ({m} iterations of same query)")
+            single_query = dataset["test"][0]
+            single_answer = dataset["answer"][0][:top]
+            if hasattr(single_answer, "tolist"):
+                single_answer = single_answer.tolist()
+        else:
+            print(f"Running sequential benchmark with {m} queries")
+
+        # Pre-convert answers if numpy
+        answers_list = dataset["answer"]
+        if hasattr(answers_list, "tolist"):
+            answers_list = [a[:top].tolist() if hasattr(a, "tolist") else a[:top] for a in answers_list]
+
+        # Build query template (psycopg3 handles prepared statement caching)
+        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
+
         results = []
-        pbar = tqdm(enumerate(dataset["test"]), total=m)
-        for i, query in pbar:
+        latencies = []  # Pre-allocate for efficiency
+
+        # Reuse single cursor to avoid creation overhead
+        cursor = conn.cursor()
+
+        pbar = tqdm(range(m), total=m, ncols=80,
+                    bar_format="{desc} {n}/{total}: {percentage:3.0f}%|{bar}|")
+        for i in pbar:
+            # Get query
+            query = single_query if self.debug_single_query else dataset["test"][i]
+
             start = time.perf_counter()
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}",
-                    (query,),
-                )
-                result = cursor.fetchall()
+            cursor.execute(query_sql, (query,))
+            result = cursor.fetchall()
             end = time.perf_counter()
 
             query_time = end - start
-            # Handle numpy vs list for answer
-            answers = dataset["answer"][i][:top]
-            if hasattr(answers, "tolist"):
-                answers = answers.tolist()
+            latencies.append(query_time)
+
+            if self.debug_single_query:
+                answers = single_answer
+            else:
+                answers = answers_list[i] if isinstance(answers_list, list) else answers_list[i][:top]
+                if hasattr(answers, "tolist"):
+                    answers = answers.tolist()
 
             # Simple set intersection for Recall
-            hit = len(set([p[0] for p in result[:top]]) & set(answers))
+            hit = len({p[0] for p in result[:top]} & set(answers))
             results.append((hit, query_time))
 
-            curr_results = results[: i + 1]
-            curr_recall, curr_qps, curr_p50, _ = calculate_metrics(curr_results, top, i + 1, num_processes=1)
-            pbar.set_description(f"recall: {curr_recall:.4f} QPS: {curr_qps:.2f} P50: {curr_p50:.2f}ms")
+            # Update stats every 50 iterations to reduce overhead
+            if (i + 1) % 50 == 0 or i == m - 1:
+                curr_recall = sum(r[0] for r in results) / (top * (i + 1))
+                total_time = sum(latencies)
+                curr_qps = (i + 1) / total_time
+                curr_p50 = np.percentile(latencies, 50) * 1000
+                recall_color = "\033[92m" if curr_recall >= 0.95 else "\033[91m"
+                pbar.set_description(f"recall: {recall_color}{curr_recall:.4f}\033[0m QPS: {curr_qps:.2f} P50: {curr_p50:.2f}ms")
 
+        cursor.close()
         pbar.close()
         return results, metric_ops
 
-    def parallel_bench(self, name, table_name, dataset, metric_ops, top, num_processes, benchmark):
+    def parallel_bench(self, name, table_name, dataset, metric_ops, top, query_clients, benchmark):
         test = dataset["test"]
         answer = dataset["answer"]
         m = test.shape[0]
-        self.debug_log(f"Parallel benchmark with {m} queries using {num_processes} processes")
+        total_queries = m * query_clients
+
+        print(f"Running parallel benchmark with {query_clients} clients × {m} queries = {total_queries:,} total")
 
         batches = []
-        for _ in range(num_processes):
+        for _ in range(query_clients):
             batch = self.make_batch_args(test, answer, top, metric_ops, table_name, benchmark)
             batches.append(batch)
 
-        self.prewarm_index(table_name)
+        all_results = []
+        pbar = tqdm(total=total_queries, ncols=80,
+                    bar_format="{desc} {n}/{total}: {percentage:3.0f}%|{bar}|")
 
-        with mp.Pool(processes=num_processes) as pool:
-            batch_results = list(pool.map(self.__class__.process_batch, batches))
+        with mp.Pool(processes=query_clients) as pool:
+            for batch_result in pool.imap_unordered(self.__class__.process_batch, batches):
+                all_results.extend(batch_result)
 
-        all_results = [result for batch in batch_results for result in batch]
+                # Update progress and stats
+                completed = len(all_results)
+                pbar.n = completed
+                pbar.refresh()
+
+                # Calculate current metrics
+                if completed > 0:
+                    hits = sum(r[0] for r in all_results)
+                    recall = hits / (top * completed)
+                    total_time = calculate_coverage([r[1] for r in all_results])
+                    qps = completed / total_time
+                    latencies = [(r[1][1] - r[1][0]) for r in all_results]
+                    p50 = np.percentile(latencies, 50) * 1000
+
+                    recall_color = "\033[92m" if recall >= 0.95 else "\033[91m"
+                    pbar.set_description(f"recall: {recall_color}{recall:.4f}\033[0m QPS: {qps:.2f} P50: {p50:.2f}ms")
+
+        pbar.close()
         return all_results, metric_ops
 
     def run_benchmark(self, suite_name: str, name: str, table_name: str, result_dir: str, benchmark: dict,
-                      dataset: dict, num_processes):
-        event = threading.Event()
-        os_monitor_thread = threading.Thread(
-            target=monitor.os_stats.monitor_and_generate_report,
-            args=(result_dir, self.devices, event),
-        )
-        os_monitor_thread.start()
-
+                      dataset: dict, query_clients):
         top = self.config[suite_name]["top"]
         metric = self.config[suite_name]["metric"]
         m = dataset["test"].shape[0]
 
-        self.debug_log(f"Running benchmark with top={top}, metric_ops={metric} and num_processes={num_processes}")
+        if self.debug:
+            print(f"\n🔍 Benchmark Configuration:")
+            print(f"    • Name:            {name}")
+            print(f"    • Queries:         {m:,}")
+            print(f"    • Top-K:           {top}")
+            print(f"    • Metric:          {metric}")
+            print(f"    • Clients:         {query_clients}")
+            print(f"    • Mode:            {'parallel' if query_clients > 1 else 'sequential'}")
+            print()
 
-        if num_processes > 1:
-            results, metric_ops = self.parallel_bench(suite_name, table_name, dataset, metric, top, num_processes,
+        if query_clients > 1:
+            results, metric_ops = self.parallel_bench(suite_name, table_name, dataset, metric, top, query_clients,
                                                       benchmark)
         else:
             conn = self.create_connection()
@@ -612,10 +716,8 @@ class TestSuite:
             conn.close()
 
         self.results[suite_name]["metric_ops"] = metric_ops
-        event.set()
-        os_monitor_thread.join()
 
-        recall, qps, p50, p99 = calculate_metrics(results, top, m, num_processes)
+        recall, qps, p50, p99 = calculate_metrics(results, top, m, query_clients)
         print(f"Top: {top} | Recall: {recall:.4f} | QPS: {qps:.2f} | P50: {p50:.2f}ms | P99: {p99:.2f}ms")
 
         self.results[suite_name][name] = {
@@ -625,13 +727,16 @@ class TestSuite:
             "p99_latency": p99,
         }
 
-    def run_benchmarks(self, suite_name: str, table_name: str, dataset: dict, num_processes):
+    def run_benchmarks(self, suite_name: str, table_name: str, dataset: dict, query_clients):
+        # Prewarm index once before all benchmarks
+        self.prewarm_index(table_name)
+
         for name, benchmark in self.config[suite_name]["benchmarks"].items():
             print(f"Running benchmark: {benchmark}")
             result_dir = f"./results/{suite_name}/"
             os.makedirs(result_dir, exist_ok=True)
             self.results[suite_name][name] = {}
-            self.run_benchmark(suite_name, name, table_name, result_dir, benchmark, dataset, num_processes)
+            self.run_benchmark(suite_name, name, table_name, result_dir, benchmark, dataset, query_clients)
 
     def generate_markdown_result(self):
         return NotImplementedError("generate_markdown_result method should be implemented in subclasses.")
@@ -642,9 +747,38 @@ class TestSuite:
 
         dataset_name = self.config[name]["dataset"]
         table_name = dataset_name.replace("-", "_")
-        self.debug_log(f"table_name: {table_name}, dataset: {dataset_name}, centroids: {self.centroids_table}")
+        config = self.config[name]
+        if self.debug:
+            print(f"\n⚙️  Suite Configuration:")
+            print(f"    • Test Name:       {name}")
+            print(f"    • Table:           {table_name}")
+            print(f"    • Dataset:         {dataset_name}")
+            print(f"    • PG Parallel Workers: {config.get('pg_parallel_workers')}")
+            print(f"    • Metric:          {config.get('metric')}")
+            print(f"    • Centroids Table: {self.centroids_table or 'None'}")
+            print(f"    • Benchmarks to run: {len(config.get('benchmarks', {}))}")
+            print()
+
+        # Initialize system monitor only for local databases
+        if self.is_local_db:
+            self.system_monitor = SystemMonitor(
+                results_dir=f"./results/{name}",
+                devices=self.devices if self.devices else None,
+                sample_interval=1.0  # Sample every second
+            )
+            self.system_monitor.start()  # Start background monitoring
+        else:
+            self.system_monitor = None
 
         self.init_ext(name)
+
+        # Initialize PG stats collector
+        conn = self.create_connection()
+        self.pg_stats_collector = PGStatsCollector(conn)
+
+        # Only capture baseline if table already exists (skip_add_embeddings case)
+        if self.skip_add_embeddings:
+            self.pg_stats_collector.capture_snapshot("baseline", table_name)
 
         # 1. LOAD DATASET (Unified)
         ds = datasets.get_dataset(dataset_name)
@@ -653,9 +787,11 @@ class TestSuite:
 
         # 2. ADD EMBEDDINGS
         if not self.skip_add_embeddings:
+            if self.system_monitor:
+                self.system_monitor.mark_phase("load_start")
             ds_type = ds["type"]
             if ds_type == "hdf5":
-                self.add_embeddings_from_hdf5(name, table_name, ds["train"], self.config[name]["workers"])
+                self.add_embeddings_from_hdf5(name, table_name, ds["train"], self.config[name]["pg_parallel_workers"])
                 if hasattr(ds["train"], "close"):
                     ds["train"].close()
             elif ds_type in ["laion-multipart", "deep1b-mmap"]:
@@ -665,24 +801,78 @@ class TestSuite:
             del ds["train"]
             gc.collect()
 
+            if self.system_monitor:
+                self.system_monitor.mark_phase("load_end")
+            self.pg_stats_collector.capture_snapshot("after_load", table_name)
+
         if self.centroids is not None and not self.skip_index_creation:
             self.add_centroids_to_table(self.centroids)
-        if self.centroids_table and not self.skip_index_creation:
-            self.debug_log(f"Using centroids table: {self.centroids_table}")
 
         if "metric" in self.config[name]:
             ds["metric"] = self.config[name]["metric"]
 
         if not self.skip_index_creation:
+            if self.system_monitor:
+                self.system_monitor.mark_phase("index_start")
             self.create_index(name, table_name, ds)
             self.calculate_index_size(name, table_name)
+            if self.system_monitor:
+                self.system_monitor.mark_phase("index_end")
+            self.pg_stats_collector.capture_snapshot("after_index", table_name)
         else:
             print("Skipping index creation as requested.")
 
-        self.run_benchmarks(name, table_name, ds, self.num_processes)
+        if self.system_monitor:
+            self.system_monitor.mark_phase("benchmark_start")
+        self.run_benchmarks(name, table_name, ds, self.query_clients)
+        if self.system_monitor:
+            self.system_monitor.mark_phase("benchmark_end")
+            self.system_monitor.stop()  # Stop background monitoring
+        self.pg_stats_collector.capture_snapshot("after_benchmark", table_name)
+
+        conn.close()
+
+    def get_monitoring_data(self, suite_name: str) -> tuple:
+        """
+        Get formatted monitoring data for reports.
+
+        Returns:
+            Tuple of (system_metrics_md, pg_stats_md, dashboard_path)
+        """
+        system_metrics_md = None
+        pg_stats_md = None
+        dashboard_path = None
+
+        if self.system_monitor:
+            system_metrics_md = self.system_monitor.format_for_report()
+            dashboard_path = self.system_monitor.generate_dashboard(suite_name)
+            self.system_monitor.save_csv(f"{suite_name}_system_metrics.csv")
+
+        if self.pg_stats_collector:
+            pg_stats_md = self.pg_stats_collector.format_for_report()
+
+        return system_metrics_md, pg_stats_md, dashboard_path
 
     def run(self):
         os.makedirs("./results", exist_ok=True)
+
+        # Auto-detect IO device if not specified and database is local
+        if self.is_local_db and self.devices is None:
+            conn = self.create_connection()
+            detected_devices = detect_pg_io_device(conn)
+            conn.close()
+
+            if detected_devices:
+                self.devices = detected_devices
+                self.debug_log(f"Auto-detected PostgreSQL data device: {', '.join(self.devices)}")
+            else:
+                print("Warning: Could not auto-detect PostgreSQL data device. IO monitoring disabled.")
+                self.devices = []
+
+        # Generate system report only for local databases
+        if self.is_local_db:
+            generate_system_report("./results")
+
         for suite_name in self.config:
             print(f"Running test: {suite_name}")
             self.run_suite(suite_name)

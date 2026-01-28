@@ -1,73 +1,67 @@
+"""
+pgvector Benchmark Suite
+
+Benchmarks vector search using the pgvector extension with HNSW indexes
+for PostgreSQL.
+"""
+
 import argparse
+import time
+
 import psycopg
 import pgvector.psycopg
 
-from time import perf_counter
-from mdutils.mdutils import MdUtils
-
 import common
+from results import ResultsManager
 
 
 def build_arg_parse():
-    parser = argparse.ArgumentParser(description="PGVector Test Suite")
+    """Build argument parser for pgvector benchmark suite."""
+    parser = argparse.ArgumentParser(description="pgvector Benchmark Suite")
     common.build_arg_parse(parser)
-
-    # Add specific arguments for PGVector suite
-    # None
-
     return parser
 
 
 class TestSuite(common.TestSuite):
+    """
+    Test suite for pgvector HNSW indexing.
+
+    Uses the pgvector extension to build HNSW indexes and perform
+    approximate nearest neighbor searches.
+    """
 
     @staticmethod
     def process_batch(args):
-        import time
-
-        # Unpack and use ef_search
+        """Process a batch of queries in parallel."""
         test, answer, top, metric_ops, url, table_name, ef_search = args
 
         conn = psycopg.connect(url)
-
+        pgvector.psycopg.register_vector(conn)
         conn.execute(f"SET hnsw.ef_search={ef_search}")
 
-        hits = 0
-        results = []
+        query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
 
+        results = []
+        cursor = conn.cursor()
         for query, ground_truth in zip(test, answer):
             start = time.perf_counter()
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s::vector LIMIT {top}",
-                    (query.tolist() if hasattr(query, "tolist") else list(query),),
-                )
-                result = cursor.fetchall()
+            cursor.execute(query_sql, (query,))
+            result = cursor.fetchall()
             end = time.perf_counter()
 
-            result_ids = set([p[0] for p in result[:top]])
-            ground_truth_ids = set(
-                ground_truth[:top].tolist() if hasattr(ground_truth[:top], "tolist") else ground_truth[:top])
+            result_ids = {p[0] for p in result[:top]}
+            gt_ids = ground_truth[:top]
+            ground_truth_ids = set(gt_ids.tolist() if hasattr(gt_ids, "tolist") else gt_ids)
             hit = len(result_ids & ground_truth_ids)
-            hits += hit
-
             results.append((hit, (start, end)))
 
+        cursor.close()
         conn.close()
         return results
 
     def make_batch_args(self, test, answer, top, metric, table_name, benchmark):
-        # Pass extra args for pgvector
-
-        # Determine metric operations based on dataset metric
-        if metric in {"l2", "euclidean"}:
-            metric_ops = "<->"
-        elif metric in {"cos", "angular"}:
-            metric_ops = "<=>"
-        elif metric in {"dot", "ip"}:
-            metric_ops = "<#>"
-        else:
-            raise ValueError("unsupported metric type")
-
+        """Prepare arguments for parallel batch processing."""
+        metric_ops = self._get_metric_operator(metric)
         return (
             test,
             answer,
@@ -75,16 +69,46 @@ class TestSuite(common.TestSuite):
             metric_ops,
             self.url,
             table_name,
-            benchmark["efSearch"]
+            benchmark["efSearch"],
         )
 
+    @staticmethod
+    def _get_metric_operator(metric: str) -> str:
+        """Convert metric name to PostgreSQL operator."""
+        operators = {
+            "l2": "<->",
+            "euclidean": "<->",
+            "cos": "<=>",
+            "angular": "<=>",
+            "dot": "<#>",
+            "ip": "<#>",
+        }
+        if metric not in operators:
+            raise ValueError(f"Unsupported metric type: {metric}")
+        return operators[metric]
+
+    @staticmethod
+    def _get_metric_func(metric: str) -> str:
+        """Convert metric name to pgvector operator class."""
+        funcs = {
+            "l2": "vector_l2_ops",
+            "euclidean": "vector_l2_ops",
+            "cos": "vector_cosine_ops",
+            "ip": "vector_ip_ops",
+            "dot": "vector_ip_ops",
+        }
+        if metric not in funcs:
+            raise ValueError(f"Unsupported metric type: {metric}")
+        return funcs[metric]
+
     def create_connection(self):
+        """Create a database connection with pgvector support."""
         conn = super().create_connection()
         pgvector.psycopg.register_vector(conn)
-
         return conn
 
     def init_ext(self, suite_name: str = None):
+        """Initialize required PostgreSQL extensions."""
         conn = super().create_connection()
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.execute("CREATE EXTENSION IF NOT EXISTS pg_prewarm")
@@ -92,55 +116,57 @@ class TestSuite(common.TestSuite):
         self.debug_log("Extensions initialized successfully.")
 
     def prewarm_index(self, table_name: str):
+        """Prewarm the index into memory for consistent benchmarking."""
         conn = self.create_connection()
         print("Prewarming the index...", end="", flush=True)
         try:
-            conn.execute(
-                f"SELECT pg_prewarm('{table_name}_embedding_idx')")
+            conn.execute(f"SELECT pg_prewarm('{table_name}_embedding_idx')")
             print(" done!")
-        except Exception:
-            print(" failed!")
-            pass
+        except psycopg.Error as e:
+            print(f" failed! ({e.diag.message_primary})")
+            self.debug_log(f"Prewarm failed: {e}")
         finally:
             conn.close()
 
     def create_index(self, suite_name: str, table_name: str, dataset: dict):
-        event, os_monitor_thread, index_monitor_thread = super().create_index(suite_name, table_name, dataset)
-
-        workers = self.config[suite_name]["workers"]
-        m = self.config[suite_name]["m"]
-        ef_construction = self.config[suite_name]["efConstruction"]
-        metric = dataset["metric"]
-
-        if metric == "l2" or metric == "euclidean":
-            metric_func = "vector_l2_ops"
-        elif metric == "cos":
-            metric_func = "vector_cosine_ops"
-        elif metric == "ip" or metric == "dot":
-            metric_func = "vector_ip_ops"
-        else:
-            raise ValueError
-
-        self.debug_log(f"metric_func: {metric_func}, workers: {workers}, m: {m}, ef_construction: {ef_construction}")
-
-        conn = self.create_connection()
-        start_time = perf_counter()
-        conn.execute(f"SET max_parallel_maintenance_workers TO {workers}")
-        conn.execute(f"SET max_parallel_workers TO {workers}")
-        conn.execute(
-            f"CREATE INDEX {table_name}_embedding_idx ON {table_name} USING hnsw (embedding {metric_func}) WITH (m = {m}, ef_construction = {ef_construction})"
+        """Create an HNSW index using pgvector."""
+        event, index_monitor_thread = super().create_index(
+            suite_name, table_name, dataset
         )
 
+        config = self.config[suite_name]
+        pg_parallel_workers = config["pg_parallel_workers"]
+        m = config["m"]
+        ef_construction = config["efConstruction"]
+        metric = dataset["metric"]
+        metric_func = self._get_metric_func(metric)
 
-        self.results[suite_name]["index_build_time"] = int(round(perf_counter() - start_time))
-        print(f'Index build time: {self.results[suite_name]["index_build_time"]}s')
+        if self.debug:
+            print(f"\n🔧 Index Configuration (HNSW):")
+            print(f"    • M:               {m}")
+            print(f"    • EF Construction: {ef_construction}")
+            print(f"    • Metric Function: {metric_func}")
+            print()
+
+        conn = self.create_connection()
+        start_time = time.perf_counter()
+
+        conn.execute(f"SET max_parallel_maintenance_workers TO {pg_parallel_workers}")
+        conn.execute(f"SET max_parallel_workers TO {pg_parallel_workers}")
+        conn.execute(
+            f"CREATE INDEX {table_name}_embedding_idx ON {table_name} "
+            f"USING hnsw (embedding {metric_func}) WITH (m = {m}, ef_construction = {ef_construction})"
+        )
+
+        build_time = int(round(time.perf_counter() - start_time))
+        self.results[suite_name]["index_build_time"] = build_time
+        print(f"Index build time: {build_time}s")
 
         conn.close()
-        print(f"Index built successfully.")
+        print("Index built successfully.")
 
         event.set()
         index_monitor_thread.join()
-        os_monitor_thread.join()
 
     def sequential_bench(
         self,
@@ -150,98 +176,67 @@ class TestSuite(common.TestSuite):
         metric: str,
         top: int,
         benchmark: dict,
-        dataset: dict
-    ) -> list[tuple[int, float]]:
+        dataset: dict,
+    ) -> tuple[list[tuple[int, float]], str]:
+        """Run sequential benchmark queries."""
         conn.execute(f"SET hnsw.ef_search={benchmark['efSearch']}")
-        print(f"ef_search: {benchmark['efSearch']}")
 
-        self.prewarm_index(table_name)
+        metric_ops = self._get_metric_operator(metric)
 
-        if metric in {"l2", "euclidean"}:
-            metric_ops = "<->"
-        elif metric in {"cos", "angular"}:
-            metric_ops = "<=>"
-        elif metric in {"dot", "ip"}:
-            metric_ops = "<#>"
-        else:
-            raise ValueError("unsupported metric type")
+        self.debug_log(
+            f"Benchmark config: ef_search={benchmark['efSearch']}, "
+            f"metric={metric}, metric_ops={metric_ops}"
+        )
 
-        self.debug_log(f"metric_ops: {metric_ops}, dataset metric: {dataset['metric']}")
-
-        return super().sequential_bench(name, table_name, conn, metric_ops, top, benchmark,dataset)
+        return super().sequential_bench(
+            name, table_name, conn, metric_ops, top, benchmark, dataset
+        )
 
     def generate_markdown_result(self):
-        self.debug_log(self.results)
-        md_file = MdUtils(
-            file_name="./results/benchmark_results", title="Benchmark Results",
-        )
+        """Generate benchmark results with charts and consolidated CSV."""
+        self.debug_log(f"Results: {self.results}")
 
-        list_of_strings = [
-            "test_name",
-            "dataset",
-            "workers",
-            "metric",
-            "num_processes",
-            "m",
-            "ef_construction",
-            "ef_search",
-            "top",
-            "load_time",
-            "index_build_time",
-            "index_size",
-            "recall",
-            "qps",
-            "p50_latency",
-            "p99_latency",
-        ]
+        results_manager = ResultsManager()
 
-        columns = len(list_of_strings)
+        # Get monitoring data for each suite
+        for suite_name in self.config:
+            system_metrics, pg_stats, dashboard_path = self.get_monitoring_data(suite_name)
 
-        rows = 1
-        for suite_name, suite in self.config.items():
-            for name, benchmark in suite["benchmarks"].items():
-                rows += 1
-                list_of_strings += [
-                    suite_name,
-                    self.config[suite_name]["dataset"],
-                    self.config[suite_name]["workers"],
-                    self.config[suite_name]["metric"],
-                    self.num_processes,
-                    self.config[suite_name]["m"],
-                    self.config[suite_name]["efConstruction"],
-                    benchmark["efSearch"],
-                    self.config[suite_name]["top"],
-                    self.results[suite_name].get("load_time", "N/A"),
-                    self.results[suite_name].get("index_build_time", "N/A"),
-                    self.results[suite_name].get("index_size", "N/A"),
-                    f'{self.results[suite_name][name]["recall"]:.4f}',
-                    f'{self.results[suite_name][name]["qps"]:.4f}',
-                    f'{self.results[suite_name][name]["p50_latency"]:.4f}',
-                    f'{self.results[suite_name][name]["p99_latency"]:.4f}',
-                ]
+            results_manager.process_suite_results(
+                suite_type="pgvector",
+                config={suite_name: self.config[suite_name]},
+                results={suite_name: self.results.get(suite_name, {})},
+                query_clients=self.query_clients,
+                system_metrics=system_metrics,
+                pg_stats=pg_stats,
+                system_dashboard_path=dashboard_path,
+            )
 
-        md_file.new_table(
-            columns=columns,
-            rows=rows,
-            text=list_of_strings,
-            text_align="right",
-        )
 
-        md_file.create_md_file()
+def main():
+    """Main entry point for pgvector benchmark suite."""
+    parser = build_arg_parse()
+    args = parser.parse_args()
+
+    test_suite = TestSuite(
+        suite_file=args.suite,
+        url=args.url,
+        devices=args.devices,
+        chunk_size=args.chunk_size,
+        skip_add_embeddings=args.skip_add_embeddings,
+        centroids=args.centroids_file,
+        centroids_table=args.centroids_table,
+        skip_index_creation=args.skip_index_creation,
+        query_clients=args.query_clients,
+        max_load_threads=args.max_load_threads,
+        debug=args.debug,
+        overwrite_table=args.overwrite_table,
+        debug_single_query=args.debug_single_query,
+    )
+
+    test_suite.run()
+    print("Test suite completed.")
 
 
 if __name__ == "__main__":
-    parser = build_arg_parse()
-    args = parser.parse_args()
-    print(args)
-
-    test_suite = TestSuite(
-        args.suite, args.url, args.devices,
-        args.chunk_size, args.skip_add_embeddings,
-        args.centroids_file, args.centroids_table,
-        args.skip_index_creation, args.num_processes,
-        args.max_load_threads, args.debug, args.overwrite_table
-    )
-    test_suite.run()
-
-    print("Test suite completed.")
+    main()

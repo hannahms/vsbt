@@ -1,16 +1,12 @@
-# python3 vectorchord_suite.py -s vectorchord_suite_20m.yaml --url postgresql://postgres@/postgres
-# python3 vectorchord_suite.py -s vectorchord_suite_20m.yaml --url postgresql://postgres@/postgres --skip_add_embeddings --skip_index_creation
-vc-deep1B-test-l2:
-  dataset: deep1b-test-l2
-  datasetType: npy
-  metric: l2
+pgpu-laion-100m-160000-test-ip:
+  dataset: laion-100m-test-ip
+  datasetType: hdf5
+  metric: dot
   samplingFactor: 256
   lists: [400, 160000]
   batchSize: 1000000
-  kmeans_hierarchical: true
   residual_quantization: true
-  build_threads: 32
-  workers: 32
+  pg_parallel_workers: 32
   top: 10
   benchmarks:
     10-20-1.0:

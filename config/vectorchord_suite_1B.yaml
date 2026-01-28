@@ -1,15 +1,14 @@
-pgpu-laion-100m-160000-test-ip:
-  dataset: laion-100m-test-ip
-  datasetType: hdf5
-  metric: dot
+vc-deep1B-test-l2:
+  dataset: deep1b-test-l2
+  datasetType: npy
+  metric: l2
   samplingFactor: 256
   lists: [400, 160000]
-  batchSize: 10000000
-  kmeans_n_redo: 3
-  kmeans_n_iter: 30
-  random_sampling: True
-  residual_quantization: false
-  workers: 63
+  batchSize: 1000000
+  kmeans_hierarchical: true
+  residual_quantization: true
+  build_threads: 32
+  pg_parallel_workers: 32
   top: 10
   benchmarks:
     10-20-1.0:

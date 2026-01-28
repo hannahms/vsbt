@@ -1,15 +1,12 @@
-pgpu-deep1B-test-l2:
-  dataset: deep1b-test-l2
-  datasetType: npy
-  metric: l2
+pgpu-laion-5m-190-35000-test-ip:
+  dataset: laion-5m-test-ip
+  datasetType: hdf5
+  metric: dot
   samplingFactor: 256
-  lists: [550, 320000]
-  batchSize: 5000000
+  lists: [190, 35000]
+  batchSize: 1000000
   residual_quantization: true
-  random_sampling: False
-  kmeans_n_redo: 1
-  kmeans_n_iter: 30
-  workers: 32
+  pg_parallel_workers: 32
   top: 10
   benchmarks:
     10-20-1.0:
