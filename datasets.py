@@ -37,7 +37,7 @@ DATASETS = {
         "num": 400_000_000,
         "base_dir": os.path.join(DATA_DIR, "laion-400m/"),
         # Link to the file you just salvaged and uploaded
-        "gt_url": "https://edb-vector-datasets.s3.amazonaws.com/laion/laion_400m_gt.npy",
+        "gt_url": "https://enterprisedb-vector-datasets.s3.amazonaws.com/laion/laion_400m_gt.npy",
         "gt_file": "laion_400m_gt.npy"
     },
 
@@ -50,9 +50,9 @@ DATASETS = {
         "base_dir": os.path.join(DATA_DIR, "deep1b"),
         # Direct URLs to your pre-converted NPY files and the IBIN ground truth
         "urls": {
-            "base": "https://edb-vector-datasets.s3.amazonaws.com/deep1b/deep1b_base.npy",
-            "query": "https://edb-vector-datasets.s3.amazonaws.com/deep1b/deep1b_queries.npy",
-            "groundtruth": "https://edb-vector-datasets.s3.amazonaws.com/deep1b/deep1b_groundtruth.npy"
+            "base": "https://enterprisedb-vector-datasets.s3.amazonaws.com/deep1b/deep1b_base.npy",
+            "query": "https://enterprisedb-vector-datasets.s3.amazonaws.com/deep1b/deep1b_queries.npy",
+            "groundtruth": "https://enterprisedb-vector-datasets.s3.amazonaws.com/deep1b/deep1b_groundtruth.npy"
         },
         # Local filenames to save them as
         "files": {
