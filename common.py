@@ -440,13 +440,15 @@ class TestSuite:
                         break
                 time.sleep(0.5)
 
-            # Show progress bar even if blocks_total is 0 (e.g., during clustering)
-            pbar = tqdm(smoothing=0.0, total=max(blocks_total, 1), desc=f"Building index ({phase})", ncols=100,
+            # Use None total when blocks_total is unknown so tqdm shows an indeterminate bar
+            pbar_total = blocks_total if blocks_total > 0 else None
+            pbar = tqdm(smoothing=0.0, total=pbar_total, desc=f"Building index ({phase})", ncols=100,
                         bar_format="{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]")
 
             while True:
                 if event.is_set():
-                    pbar.update(pbar.total - pbar.n)
+                    if pbar.total is not None:
+                        pbar.update(pbar.total - pbar.n)
                     pbar.close()
                     conn.close()
                     break
@@ -534,7 +536,9 @@ class TestSuite:
         query_sql = f"SELECT id FROM {table_name} ORDER BY embedding {metric_ops} %s LIMIT {top}"
 
         results = []
-        latencies = []  # Pre-allocate for efficiency
+        latencies = []
+        total_hits = 0
+        total_time = 0.0
 
         # Reuse single cursor to avoid creation overhead
         cursor = conn.cursor()
@@ -552,6 +556,7 @@ class TestSuite:
 
             query_time = end - start
             latencies.append(query_time)
+            total_time += query_time
 
             if self.debug_single_query:
                 answers = single_answer
@@ -562,12 +567,12 @@ class TestSuite:
 
             # Simple set intersection for Recall
             hit = len({p[0] for p in result[:top]} & set(answers))
+            total_hits += hit
             results.append((hit, query_time))
 
             # Update stats every 50 iterations to reduce overhead
             if (i + 1) % 50 == 0 or i == m - 1:
-                curr_recall = sum(r[0] for r in results) / (top * (i + 1))
-                total_time = sum(latencies)
+                curr_recall = total_hits / (top * (i + 1))
                 curr_qps = (i + 1) / total_time
                 curr_p50 = np.percentile(latencies, 50) * 1000
                 recall_color = "\033[92m" if curr_recall >= 0.95 else "\033[91m"

@@ -35,9 +35,17 @@ Datasets are automatically downloaded on first use.
 ### Install Dependencies
 
 ```bash
+# Create a virtual environment (recommended, required on RHEL 9+ and similar)
+python3.10 -m venv .venv
+source .venv/bin/activate
+
 # Install Python dependencies
 pip install -r requirements.txt
 ```
+
+> **Note:** Some systems (e.g. RHEL 9, Fedora 38+) restrict installing packages globally with pip.
+> If your system ships with Python < 3.10, install a newer version (e.g. via `dnf install python3.11`)
+> and create the venv with that: `python3.11 -m venv .venv`.
 
 ### Required PostgreSQL Extensions
 
