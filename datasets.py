@@ -236,8 +236,6 @@ def _load_deep1b_mmap(name, info):
     if missing:
         raise FileNotFoundError(f"Deep1B Missing Files: {', '.join(missing)}")
 
-    print(f"Loading Deep1B from {base_dir}...")
-
     # 3. Load
     # allow_pickle=True is used assuming these are trusted local files
     train_data = np.load(path_base, mmap_mode='r', allow_pickle=True)
@@ -265,7 +263,6 @@ def get_dataset(dataset_name):
     info = DATASETS[dataset_name]
     dtype = info.get("type", "hdf5")
 
-    print(f"Loading dataset info for: {dataset_name} ({dtype})...")
 
     if dtype == "hdf5":
         return _load_hdf5_dataset(dataset_name, info)

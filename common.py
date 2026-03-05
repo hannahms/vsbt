@@ -304,7 +304,6 @@ class TestSuite:
             conn.close()
             return
 
-        print(f"Creating TABLE {table_name}...")
         conn.execute(f"CREATE TABLE {table_name} (id integer, embedding vector({dim}))")
         if pg_parallel_workers is not None:
             conn.execute(f"ALTER TABLE {table_name} SET (parallel_workers = {pg_parallel_workers})")
@@ -336,11 +335,6 @@ class TestSuite:
                         time.sleep(0)
                 t_conn.close()
 
-            if num_threads > 1:
-                print(f"Parallel load enabled for {table_name}. Threads: {num_threads}")
-            else:
-                print(f"Sequential load enabled for {table_name}")
-
             pbar = tqdm(desc="Adding embeddings", total=n, unit=" rows", ncols=80, unit_scale=True)
 
             if num_threads > 1:
@@ -370,7 +364,6 @@ class TestSuite:
 
         else:
             # === GENERATOR PATH (LAION) ===
-            print(f"Sequential load for {table_name} (Generator source)")
             conn = self.create_connection()
             pbar = tqdm(desc="Adding embeddings", total=n, unit=" rows", ncols=80, unit_scale=True)
 
