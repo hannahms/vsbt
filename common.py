@@ -261,6 +261,27 @@ class TestSuite:
     def make_batch_args(self, test, answer, top, metric_ops, table_name, benchmark):
         return test, answer, top, metric_ops, table_name
 
+    def check_index_fits_shared_buffers(self, conn, index_name: str):
+        """Check if the index fits in shared_buffers and warn if not."""
+        try:
+            row = conn.execute(
+                "SELECT pg_relation_size(%s) AS idx_size, "
+                "setting::bigint * 8192 AS sb_size "
+                "FROM pg_settings WHERE name = 'shared_buffers'",
+                (index_name,),
+            ).fetchone()
+            if row:
+                idx_size, sb_size = row
+                idx_gb = idx_size / (1024 ** 3)
+                sb_gb = sb_size / (1024 ** 3)
+                print(f"Index size: {idx_gb:.1f} GB, shared_buffers: {sb_gb:.1f} GB")
+                if idx_size > sb_size:
+                    print(f"WARNING: Index ({idx_gb:.1f} GB) exceeds shared_buffers ({sb_gb:.1f} GB). "
+                          f"Prewarming will not fully cache the index — query performance may suffer. "
+                          f"Consider increasing shared_buffers.")
+        except psycopg.Error:
+            pass
+
     def prewarm_index(self, table_name: str):
         raise NotImplementedError("prewarm_index should be implemented in subclasses.")
 

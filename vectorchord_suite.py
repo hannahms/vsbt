@@ -113,11 +113,13 @@ class TestSuite(common.TestSuite):
 
     def prewarm_index(self, table_name: str):
         """Prewarm the index into memory for consistent benchmarking."""
+        index_name = f"{table_name}_embedding_idx"
         conn = self.create_connection()
+        self.check_index_fits_shared_buffers(conn, index_name)
         print("Prewarming the index...", end="", flush=True)
         try:
             conn.execute(
-                f"SELECT vchordrq_prewarm('{table_name}_embedding_idx'::regclass)"
+                f"SELECT vchordrq_prewarm('{index_name}'::regclass)"
             )
             print(" done!")
         except psycopg.Error as e:

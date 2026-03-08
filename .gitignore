@@ -24,6 +24,9 @@ ENV/
 # Results (generated)
 results/
 
+# Planning docs
+PLAN.md
+
 # OS
 .DS_Store
 Thumbs.db

@@ -117,16 +117,54 @@ class TestSuite(common.TestSuite):
 
     def prewarm_index(self, table_name: str):
         """Prewarm the index into memory for consistent benchmarking."""
+        index_name = f"{table_name}_embedding_idx"
         conn = self.create_connection()
+        self.check_index_fits_shared_buffers(conn, index_name)
         print("Prewarming the index...", end="", flush=True)
         try:
-            conn.execute(f"SELECT pg_prewarm('{table_name}_embedding_idx')")
+            conn.execute(f"SELECT pg_prewarm('{index_name}')")
             print(" done!")
         except psycopg.Error as e:
             print(f" failed! ({e.diag.message_primary})")
             self.debug_log(f"Prewarm failed: {e}")
         finally:
             conn.close()
+
+    @staticmethod
+    def estimate_hnsw_graph_memory(num_vectors: int, dim: int, m: int) -> int:
+        """Estimate maintenance_work_mem needed for an in-memory HNSW build.
+
+        Based on pgvector's in-memory graph layout (HnswElementData, neighbor
+        arrays, and vector storage). Each node at level L consumes:
+
+          MAXALIGN(sizeof(HnswElementData))        ~128 bytes
+          MAXALIGN(8 + 4*dim)                      vector value
+          MAXALIGN(8 * (L+1))                      neighbor list pointers
+          MAXALIGN(8 + 32*m)                       layer 0 neighbor array
+          L * MAXALIGN(8 + 16*m)                   upper layer neighbor arrays
+
+        Levels follow P(level >= L) = (1/m)^L, so the expected upper-layer
+        overhead per node is (1/(m-1)) * (8 + MAXALIGN(8 + 16*m)).
+        """
+        def maxalign(x):
+            return (x + 7) & ~7
+
+        element_size = 128  # sizeof(HnswElementData) after alignment
+        vector_size = maxalign(8 + 4 * dim)
+        layer0_neighbors = maxalign(8 + 32 * m)
+        layer0_ptrs = maxalign(8)  # neighbor list pointer for layer 0
+        upper_layer_cost = maxalign(8) + maxalign(8 + 16 * m)
+        upper_layer_fraction = 1.0 / (m - 1) if m > 1 else 0
+
+        avg_per_node = (
+            element_size
+            + vector_size
+            + layer0_ptrs
+            + layer0_neighbors
+            + upper_layer_fraction * upper_layer_cost
+        )
+
+        return int(num_vectors * avg_per_node)
 
     def create_index(self, suite_name: str, table_name: str, dataset: dict):
         """Create an HNSW index using pgvector."""
@@ -140,6 +178,15 @@ class TestSuite(common.TestSuite):
         ef_construction = config["efConstruction"]
         metric = dataset["metric"]
         metric_func = self._get_metric_func(metric)
+
+        num_vectors = dataset.get("num", 0)
+        dim = dataset.get("dim", 0)
+        if num_vectors and dim:
+            est_bytes = self.estimate_hnsw_graph_memory(num_vectors, dim, m)
+            est_gb = est_bytes / (1024 ** 3)
+            est_mwm = f"{int(est_gb + 1)}GB"
+            print(f"Estimated HNSW graph memory: {est_gb:.1f} GB "
+                  f"(recommended maintenance_work_mem >= '{est_mwm}')")
 
         if self.debug:
             print(f"\n🔧 Index Configuration (HNSW):")

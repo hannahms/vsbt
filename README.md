@@ -337,6 +337,102 @@ vector-search/
     └── reports/              # Markdown reports and charts
 ```
 
+## pgvector: Memory Tuning for Large HNSW Index Builds
+
+When building HNSW indexes on large tables (hundreds of millions to billions of rows), PostgreSQL's memory management can work against you. Understanding how memory is used during an index build is critical to avoiding I/O thrashing.
+
+### The Problem: `shared_buffers` Goes Unused
+
+PostgreSQL uses a **Buffer Access Strategy** (specifically `BAS_BULKREAD`) for large sequential scans, including the heap scan that feeds an HNSW index build. This strategy restricts the scan to a small ring buffer within `shared_buffers`, preventing it from evicting hot pages that other queries might need.
+
+This is great for busy OLTP systems — but on a dedicated machine building an index, it means your `shared_buffers` sits almost entirely empty while the build runs. The heap data flows through a tiny window and is immediately discarded from PostgreSQL's perspective.
+
+Meanwhile, `maintenance_work_mem` holds the HNSW graph being constructed in memory. This is anonymous memory that the OS cannot reclaim.
+
+### Estimating Graph Memory
+
+The HNSW graph is held in `maintenance_work_mem` during the build. Each node at level L consumes:
+
+```
+MAXALIGN(~128 bytes)              HnswElementData struct
++ MAXALIGN(8 + 4 × dim)          vector value (varlena header + floats)
++ MAXALIGN(8 × (L+1))            neighbor list pointers
++ MAXALIGN(8 + 32 × m)           layer 0 neighbor array  (2×m candidates × 16 bytes)
++ L × MAXALIGN(8 + 16 × m)      upper layer arrays       (m candidates × 16 bytes each)
+```
+
+Levels are assigned randomly with `P(level ≥ L) = (1/m)^L`, so the expected upper-layer overhead per node is `1/(m−1) × (8 + MAXALIGN(8 + 16×m))`.
+
+`ef_construction` does **not** affect graph memory — it only adds transient per-worker search buffers that are freed after each tuple insertion.
+
+**Quick estimates** (average bytes per node including upper-layer overhead):
+
+| dim | m=16 | m=32 | m=64 |
+|-----|------|------|------|
+| 96  | ~1,066 | ~1,577 | ~2,601 |
+| 768 | ~3,754 | ~4,265 | ~5,289 |
+
+For example, 1B vectors with dim=96 and m=16 requires ~**993 GB** of `maintenance_work_mem`. The benchmark suite prints this estimate before starting the index build.
+
+If the graph exceeds `maintenance_work_mem`, pgvector flushes the in-memory graph to disk and switches to a much slower on-disk insertion mode for remaining tuples.
+
+### Example
+
+Consider a machine with 512GB of RAM building an HNSW index on a 200GB table:
+
+```
+shared_buffers       = 128GB   (pinned, but nearly empty during the build)
+maintenance_work_mem = 256GB   (pinned, holds the HNSW graph)
+─────────────────────────────
+Total pinned         = 384GB
+Available for OS page cache = ~100GB  (512 - 384 - OS overhead)
+Table on disk        = 200GB
+```
+
+The table doesn't fit in the remaining page cache. The OS constantly evicts and re-reads pages, `kswapd` runs at 100% CPU trying to reclaim memory, and most parallel workers end up blocked on `DataFileRead` — waiting for disk instead of doing useful work.
+
+You can verify this during a build with `pg_buffercache`:
+
+```sql
+-- Check what's actually in shared_buffers
+CREATE EXTENSION IF NOT EXISTS pg_buffercache;
+
+SELECT c.relname, count(*) AS buffers,
+       pg_size_pretty(count(*) * 8192::bigint) AS size
+FROM pg_buffercache b
+JOIN pg_class c ON b.relfilenode = c.relfilenode
+WHERE b.reldatabase = (SELECT oid FROM pg_database WHERE datname = current_database())
+GROUP BY c.relname ORDER BY count(*) DESC LIMIT 10;
+```
+
+If you see your table occupying only a few MB out of many GB of `shared_buffers`, that confirms the ring buffer strategy is active.
+
+### The Fix: Lower `shared_buffers` for Index Builds
+
+Since the heap scan bypasses `shared_buffers`, that memory is better given to the OS page cache, which will happily cache the entire table without any ring buffer restriction.
+
+For the example above, setting `shared_buffers = 8GB` changes the picture:
+
+```
+shared_buffers       = 8GB
+maintenance_work_mem = 256GB
+─────────────────────────────
+Total pinned         = 264GB
+Available for OS page cache = ~220GB  (512 - 264 - OS overhead)
+Table on disk        = 200GB   ← now fits entirely in page cache
+```
+
+The entire table stays cached, `kswapd` goes quiet, parallel workers stop waiting on disk, and the build runs significantly faster — despite *lower* PostgreSQL settings.
+
+### Recommendations
+
+- **Before the index build:** temporarily lower `shared_buffers` (e.g., 8–16GB) and restart PostgreSQL.
+- **After the build:** raise `shared_buffers` back to its normal value for query serving, where it will be used effectively.
+- **`maintenance_work_mem`** should be sized to fit the HNSW graph. If it's too small the build will spill to disk; if it's too large it starves page cache.
+- **`max_parallel_maintenance_workers`** — more workers than your storage can feed just adds I/O contention. Monitor `pg_stat_activity` for `DataFileRead` waits and reduce workers if most are blocked on I/O.
+
+> **Note:** This applies to PostgreSQL through version 17. PostgreSQL 18 introduces `io_method=io_uring` with Direct I/O support, which bypasses the OS page cache entirely and may change these trade-offs.
+
 ## Contributors
 
 - **Alessandro Ferraresi** - Initial creator
