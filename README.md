@@ -489,6 +489,19 @@ Table on disk        = 200GB   ← now fits entirely in page cache
 
 The entire table stays cached, `kswapd` goes quiet, parallel workers stop waiting on disk, and the build runs significantly faster — despite *lower* PostgreSQL settings.
 
+### Prewarming for Query Benchmarks
+
+For consistent benchmark results, both the **index** and the **heap table** should be warmed before running queries:
+
+- **Index → shared_buffers:** `pg_prewarm('index_name')` loads index pages into shared_buffers (default `'buffer'` mode). For VectorChord, use `vchordrq_prewarm()` instead.
+- **Heap → OS page cache:** `pg_prewarm('table_name', 'read')` loads heap pages into the OS page cache without consuming shared_buffers.
+
+HNSW queries need the heap for distance reranking — every candidate node requires a vector lookup from the heap. If the heap is cold (not in page cache), queries hit disk on these lookups, significantly reducing QPS.
+
+The benchmark suite handles this automatically: it prewarms the index into shared_buffers, then prewarms the heap into page cache. When `--no-fs-cache` is used, the page cache is dropped after both prewarm steps, so only the index in shared_buffers remains warm — this isolates the pure shared_buffers performance from page cache effects.
+
+**Memory requirement:** For full prewarming, you need enough RAM for shared_buffers (index) + page cache (heap). If the combined size exceeds available RAM, the heap prewarm will partially evict itself — in that case, the heap warms organically during the first few hundred queries.
+
 ### Recommendations
 
 - **Before the index build:** temporarily lower `shared_buffers` (e.g., 8–16GB) and restart PostgreSQL.
@@ -497,6 +510,40 @@ The entire table stays cached, `kswapd` goes quiet, parallel workers stop waitin
 - **`max_parallel_maintenance_workers`** — more workers than your storage can feed just adds I/O contention. Monitor `pg_stat_activity` for `DataFileRead` waits and reduce workers if most are blocked on I/O.
 
 > **Note:** This applies to PostgreSQL through version 17. PostgreSQL 18 introduces `io_method=io_uring` with Direct I/O support, which bypasses the OS page cache entirely and may change these trade-offs.
+
+### NUMA Considerations for Multi-Socket Machines
+
+On multi-socket servers (common for large-memory machines used in vector search), NUMA (Non-Uniform Memory Access) can cause significant and hard-to-diagnose performance variation.
+
+Each CPU socket has its own memory controller and local RAM. Accessing local memory takes ~80-100ns, while accessing memory on the other socket crosses the inter-socket link (Intel UPI) and takes ~130-170ns — roughly 1.5-1.7x slower.
+
+**The problem:** When PostgreSQL allocates `shared_buffers`, the kernel uses a first-touch policy — pages are placed on the NUMA node of the core that first accesses them. If `pg_prewarm` runs on a single core, the entire index (hundreds of GB) ends up physically on one NUMA node. Queries running on cores of the other node pay the remote access penalty on every buffer access.
+
+For HNSW graph traversal, a single query performs thousands of random memory accesses (following neighbor pointers, loading vectors for distance computation). At efSearch=800 with a 646GB index, the difference between a query running on a "local" core vs a "remote" core can be **30-40% in QPS** — with no change in configuration.
+
+**The fix:** Start PostgreSQL with interleaved memory allocation:
+
+```bash
+numactl --interleave=all pg_ctl start -D /path/to/pgdata
+
+# Or via systemd override:
+# [Service]
+# ExecStart=numactl --interleave=all /usr/pgsql-17/bin/postgres -D /data/pgdata
+```
+
+This round-robins shared_buffers pages across all NUMA nodes, ensuring consistent average latency regardless of which core runs the query. You lose ~10-15% vs the best case (all local), but gain reproducible results and eliminate the worst case.
+
+**Verify NUMA topology:**
+
+```bash
+numactl --hardware          # Show NUMA nodes and memory per node
+numastat                    # Show hit/miss counters per node
+numastat -p $(pgrep -d, postgres)  # Per-process NUMA stats
+```
+
+If `numa_miss` / `numa_foreign` counters are high relative to `numa_hit`, queries are frequently accessing remote memory.
+
+> **Note:** AMD EPYC processors can have multiple NUMA nodes within a single socket (up to 4 or 8 depending on NPS configuration). Even "single socket" EPYC servers may exhibit NUMA effects. Check `numactl --hardware` to verify.
 
 ## Contributors
 

@@ -120,7 +120,7 @@ class TestSuite(common.TestSuite):
         index_name = f"{table_name}_embedding_idx"
         conn = self.create_connection()
         self.check_index_fits_shared_buffers(conn, index_name)
-        print("Prewarming the index...", end="", flush=True)
+        print("Prewarming the index into shared_buffers...", end="", flush=True)
         try:
             prewarm_start = time.perf_counter()
             conn.execute(f"SELECT pg_prewarm('{index_name}')")
@@ -129,6 +129,16 @@ class TestSuite(common.TestSuite):
         except psycopg.Error as e:
             print(f" failed! ({e.diag.message_primary})")
             self.debug_log(f"Prewarm failed: {e}")
+
+        print("Prewarming the heap into page cache...", end="", flush=True)
+        try:
+            prewarm_start = time.perf_counter()
+            conn.execute(f"SELECT pg_prewarm('{table_name}', 'read')")
+            prewarm_time = time.perf_counter() - prewarm_start
+            print(f" done! ({prewarm_time:.1f}s)")
+        except psycopg.Error as e:
+            print(f" failed! ({e.diag.message_primary})")
+            self.debug_log(f"Heap prewarm failed: {e}")
         finally:
             conn.close()
 
