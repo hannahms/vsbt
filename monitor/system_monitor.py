@@ -562,17 +562,14 @@ class SystemMonitor:
         return "\n".join(lines)
 
 
-def generate_system_report(results_dir: str) -> Path:
+def generate_system_report() -> str:
     """
-    Generate a system information report.
+    Generate a system information report as a string.
 
     This is a portable version that uses psutil where possible
     and gracefully handles missing system commands.
+    The report is embedded in the markdown report, not written to a separate file.
     """
-    results_path = Path(results_dir)
-    results_path.mkdir(parents=True, exist_ok=True)
-    filepath = results_path / "system_report.txt"
-
     lines = []
 
     # Host info
@@ -635,10 +632,4 @@ def generate_system_report(results_dir: str) -> Path:
         except (PermissionError, OSError):
             continue
 
-    content = "\n".join(lines)
-
-    # Write report
-    with open(filepath, "w") as f:
-        f.write(content)
-
-    return filepath, content
+    return "\n".join(lines)

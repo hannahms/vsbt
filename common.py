@@ -940,7 +940,7 @@ class TestSuite:
         # Generate system report only for local databases
         self._system_report_content = None
         if self.is_local_db:
-            _, self._system_report_content = generate_system_report("./results")
+            self._system_report_content = generate_system_report()
 
         for suite_name in self.config:
             print(f"Running test: {suite_name}")
