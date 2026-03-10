@@ -8,9 +8,11 @@ Directory structure:
     results/
     ├── all_results.csv                    # Global CSV (append-only)
     ├── {test_name}/                       # One folder per YAML test name
-    │   ├── report.md                      # Incremental report (all runs)
-    │   ├── runs/                          # Raw data per run
-    │   │   └── {run_id}.json
+    │   ├── report.md                      # Aggregated report (all runs)
+    │   ├── runs/                          # Per-run subfolders
+    │   │   └── {test_name}_{timestamp}/
+    │   │       ├── run.json               # Raw data
+    │   │       └── report.md              # Full per-run report with metrics
     │   ├── charts/                        # Charts for this test
     │   │   ├── recall_vs_qps.png
     │   │   ├── latency.png
@@ -22,6 +24,7 @@ Directory structure:
 
 import csv
 import json
+import shutil
 import socket
 from datetime import datetime
 from pathlib import Path
@@ -77,6 +80,12 @@ class ResultsManager:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def _run_dir(self, test_name: str) -> Path:
+        """Get the subfolder for the current run."""
+        d = self._runs_dir(test_name) / f"{test_name}_{self._current_run_id}"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def _charts_dir(self, test_name: str) -> Path:
         d = self._test_dir(test_name) / "charts"
         d.mkdir(parents=True, exist_ok=True)
@@ -85,19 +94,33 @@ class ResultsManager:
     def _generate_run_id(self) -> str:
         return datetime.now().strftime("%Y%m%d%H%M%S")
 
-    def save_raw_results(self, test_name: str, config: dict, results: dict) -> Path:
+    def save_raw_results(
+        self,
+        test_name: str,
+        suite_type: str,
+        config: dict,
+        results: dict,
+        system_metrics: Optional[str] = None,
+        pg_stats: Optional[str] = None,
+    ) -> Path:
         """Save raw results as JSON for a single run."""
-        filepath = self._runs_dir(test_name) / f"{self._current_run_id}.json"
+        run_dir = self._run_dir(test_name)
+        filepath = run_dir / "run.json"
 
         raw_data = {
             "metadata": {
                 "run_id": self._current_run_id,
                 "test_name": test_name,
+                "suite_type": suite_type,
                 "hostname": self.hostname,
             },
             "config": config,
             "results": results,
         }
+        if system_metrics:
+            raw_data["system_metrics"] = system_metrics
+        if pg_stats:
+            raw_data["pg_stats"] = pg_stats
 
         with open(filepath, "w") as f:
             json.dump(raw_data, f, indent=2, default=str)
@@ -298,7 +321,8 @@ class ResultsManager:
         """Load all previous run JSON files for a test, sorted by run_id."""
         runs_dir = self._runs_dir(test_name)
         runs = []
-        for f in sorted(runs_dir.glob("*.json")):
+        # Support both old format (*.json in runs/) and new format (*/run.json)
+        for f in sorted(runs_dir.glob("*/run.json")):
             try:
                 with open(f) as fh:
                     runs.append(json.load(fh))
@@ -306,107 +330,42 @@ class ResultsManager:
                 continue
         return runs
 
-    def _build_run_section(self, suite_type: str, run_data: dict) -> list[str]:
-        """Build markdown lines for a single run's benchmark results."""
+    @staticmethod
+    def _run_date_str(run_id: str) -> str:
+        try:
+            return datetime.strptime(run_id, "%Y%m%d%H%M%S").strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            return run_id
+
+    def _generate_run_report(
+        self,
+        test_name: str,
+        suite_type: str,
+        run_data: dict,
+        query_clients: int = 1,
+        system_dashboard_path: Optional[Path] = None,
+    ) -> str:
+        """Generate a full markdown report for a single run."""
         results = run_data.get("results", {})
         config = run_data.get("config", {})
         metadata = run_data.get("metadata", {})
         run_id = metadata.get("run_id", "unknown")
+        run_date = self._run_date_str(run_id)
 
         sb = results.get("shared_buffers", "N/A")
         mwm = results.get("maintenance_work_mem", "N/A")
         fs_cache = results.get("fs_cache", True)
         cache_str = "with page cache" if fs_cache else "no page cache"
 
-        # Parse date from run_id
-        try:
-            run_date = datetime.strptime(run_id, "%Y%m%d%H%M%S").strftime("%Y-%m-%d %H:%M")
-        except ValueError:
-            run_date = run_id
-
         lines = [
-            f"### Run: {run_date} (sb={sb}, mwm={mwm}, {cache_str})",
+            f"# Run Report: {test_name}",
             "",
-        ]
-
-        # Build benchmark results table
-        benchmarks = config.get("benchmarks", {})
-        if not benchmarks:
-            lines.append("*No benchmark results (build-only mode)*")
-            lines.append("")
-            return lines
-
-        bench_rows = []
-        for bench_name, bench_config in benchmarks.items():
-            if bench_name in results and isinstance(results[bench_name], dict) and "recall" in results[bench_name]:
-                br = results[bench_name]
-                if suite_type == "pgvector":
-                    bench_rows.append([
-                        str(bench_config.get("efSearch", "N/A")),
-                        f"{br['recall']:.4f}",
-                        f"{br['qps']:.2f}",
-                        f"{br['p50_latency']:.2f}",
-                        f"{br['p99_latency']:.2f}",
-                    ])
-                else:
-                    bench_rows.append([
-                        str(bench_config.get("nprob", "N/A")),
-                        str(bench_config.get("epsilon", "N/A")),
-                        f"{br['recall']:.4f}",
-                        f"{br['qps']:.2f}",
-                        f"{br['p50_latency']:.2f}",
-                        f"{br['p99_latency']:.2f}",
-                    ])
-
-        if bench_rows:
-            if suite_type == "pgvector":
-                lines.extend(format_markdown_table(
-                    ["EF Search", "Recall", "QPS", "P50 (ms)", "P99 (ms)"], bench_rows))
-            else:
-                lines.extend(format_markdown_table(
-                    ["nprob", "epsilon", "Recall", "QPS", "P50 (ms)", "P99 (ms)"], bench_rows))
-        else:
-            lines.append("*No benchmark results*")
-
-        lines.append("")
-        return lines
-
-    def generate_markdown_report(
-        self,
-        suite_type: str,
-        test_name: str,
-        config: dict,
-        results: dict,
-        query_clients: int = 1,
-        system_metrics: Optional[str] = None,
-        pg_stats: Optional[str] = None,
-        system_dashboard_path: Optional[Path] = None,
-    ) -> Path:
-        """
-        Generate an incremental markdown report that includes all runs for this test.
-
-        The report is regenerated from all stored run JSON files each time,
-        so it always reflects the complete history.
-        """
-        test_dir = self._test_dir(test_name)
-        filepath = test_dir / "report.md"
-
-        # Generate charts for the current run
-        self.generate_recall_vs_qps_chart(test_name, results, config)
-        self.generate_latency_chart(test_name, results, config)
-        self.generate_build_time_chart(test_name, results, config)
-
-        # Load all runs for this test
-        all_runs = self._load_all_runs(test_name)
-
-        # --- Header ---
-        lines = [
-            f"# Benchmark Report: {test_name}",
-            "",
-            f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"**Host:** {self.hostname}",
+            f"**Date:** {run_date}",
+            f"**Host:** {metadata.get('hostname', 'N/A')}",
             f"**Suite Type:** {suite_type}",
-            f"**Total Runs:** {len(all_runs)}",
+            f"**shared_buffers:** {sb}",
+            f"**maintenance_work_mem:** {mwm}",
+            f"**Page Cache:** {cache_str}",
             "",
         ]
 
@@ -454,7 +413,157 @@ class ResultsManager:
 
         lines.extend(format_markdown_table(["Parameter", "Value"], config_rows))
 
-        # --- Build Metrics (across all runs) ---
+        # --- Build Metrics ---
+        load_time = results.get("load_time")
+        index_build_time = results.get("index_build_time")
+        index_size = results.get("index_size")
+
+        if load_time or index_build_time:
+            lines.extend(["", "---", "", "## Build Metrics", ""])
+            build_rows = [[
+                f"{load_time}s" if load_time else "N/A",
+                f"{index_build_time}s" if index_build_time else "N/A",
+                str(index_size) if index_size else "N/A",
+            ]]
+            lines.extend(format_markdown_table(
+                ["Load Time", "Build Time", "Index Size"], build_rows))
+
+        # --- Benchmark Results ---
+        benchmarks = config.get("benchmarks", {})
+        bench_rows = []
+        for bench_name, bench_config in benchmarks.items():
+            if bench_name in results and isinstance(results[bench_name], dict) and "recall" in results[bench_name]:
+                br = results[bench_name]
+                if suite_type == "pgvector":
+                    bench_rows.append([
+                        str(bench_config.get("efSearch", "N/A")),
+                        f"{br['recall']:.4f}",
+                        f"{br['qps']:.2f}",
+                        f"{br['p50_latency']:.2f}",
+                        f"{br['p99_latency']:.2f}",
+                    ])
+                else:
+                    bench_rows.append([
+                        str(bench_config.get("nprob", "N/A")),
+                        str(bench_config.get("epsilon", "N/A")),
+                        f"{br['recall']:.4f}",
+                        f"{br['qps']:.2f}",
+                        f"{br['p50_latency']:.2f}",
+                        f"{br['p99_latency']:.2f}",
+                    ])
+
+        if bench_rows:
+            lines.extend(["", "---", "", "## Benchmark Results", ""])
+            if suite_type == "pgvector":
+                lines.extend(format_markdown_table(
+                    ["EF Search", "Recall", "QPS", "P50 (ms)", "P99 (ms)"], bench_rows))
+            else:
+                lines.extend(format_markdown_table(
+                    ["nprob", "epsilon", "Recall", "QPS", "P50 (ms)", "P99 (ms)"], bench_rows))
+        elif not benchmarks:
+            lines.extend(["", "", "*No benchmark results (build-only mode)*", ""])
+
+        # --- System Metrics ---
+        system_metrics = run_data.get("system_metrics")
+        if system_metrics:
+            lines.extend(["", "---", "", system_metrics])
+            # Check for dashboard in run dir
+            run_dir = self._run_dir(test_name)
+            dashboard = run_dir / "system_dashboard.png"
+            if dashboard.exists():
+                lines.extend(["", f"![System Dashboard](system_dashboard.png)", ""])
+
+        # --- PG Stats ---
+        pg_stats = run_data.get("pg_stats")
+        if pg_stats:
+            lines.extend(["", "---", "", pg_stats])
+
+        return "\n".join(lines)
+
+    def generate_markdown_report(
+        self,
+        suite_type: str,
+        test_name: str,
+        config: dict,
+        results: dict,
+        query_clients: int = 1,
+        system_metrics: Optional[str] = None,
+        pg_stats: Optional[str] = None,
+        system_dashboard_path: Optional[Path] = None,
+    ) -> Path:
+        """
+        Generate an aggregated markdown report that includes all runs for this test.
+
+        The report is regenerated from all stored run JSON files each time,
+        so it always reflects the complete history.
+        """
+        test_dir = self._test_dir(test_name)
+        filepath = test_dir / "report.md"
+
+        # Generate charts for the current run
+        self.generate_recall_vs_qps_chart(test_name, results, config)
+        self.generate_latency_chart(test_name, results, config)
+        self.generate_build_time_chart(test_name, results, config)
+
+        # Load all runs for this test
+        all_runs = self._load_all_runs(test_name)
+
+        # --- Header ---
+        lines = [
+            f"# Benchmark Report: {test_name}",
+            "",
+            f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"**Host:** {self.hostname}",
+            f"**Suite Type:** {suite_type}",
+            f"**Total Runs:** {len(all_runs)}",
+            "",
+        ]
+
+        # --- System Information (from latest run) ---
+        system_report = results.get("system_report")
+        if system_report:
+            lines.extend([
+                "---",
+                "",
+                "## System Information",
+                "",
+                "```",
+                system_report,
+                "```",
+                "",
+            ])
+
+        # --- Configuration ---
+        lines.extend(["---", "", "## Configuration", ""])
+
+        config_rows = [
+            ["Dataset", str(config.get("dataset", "N/A"))],
+            ["Metric", str(config.get("metric", "N/A"))],
+            ["PG Parallel Workers", str(config.get("pg_parallel_workers", "N/A"))],
+            ["Query Clients", str(query_clients)],
+            ["Top-K", str(config.get("top", "N/A"))],
+        ]
+
+        if suite_type == "pgvector":
+            config_rows.extend([
+                ["M", str(config.get("m", "N/A"))],
+                ["EF Construction", str(config.get("efConstruction", "N/A"))],
+            ])
+        elif suite_type in ("vectorchord", "pgpu"):
+            config_rows.extend([
+                ["Lists", str(config.get("lists", results.get("lists", "N/A")))],
+                ["Sampling Factor", str(config.get("samplingFactor", "N/A"))],
+                ["Residual Quantization", str(config.get("residual_quantization", "N/A"))],
+            ])
+            if suite_type == "vectorchord":
+                config_rows.extend([
+                    ["Build Threads", str(results.get("build_threads", "N/A"))],
+                    ["K-means Hierarchical", str(config.get("kmeans_hierarchical", "N/A"))],
+                ])
+
+        lines.extend(format_markdown_table(["Parameter", "Value"], config_rows))
+
+        # --- Build Metrics (only runs that actually built something) ---
         lines.extend(["", "---", "", "## Build Metrics", ""])
 
         build_rows = []
@@ -462,39 +571,98 @@ class ResultsManager:
             r = run_data.get("results", {})
             m = run_data.get("metadata", {})
             run_id = m.get("run_id", "?")
-            try:
-                run_date = datetime.strptime(run_id, "%Y%m%d%H%M%S").strftime("%Y-%m-%d %H:%M")
-            except ValueError:
-                run_date = run_id
+            run_date = self._run_date_str(run_id)
+
+            load_time = r.get("load_time")
+            index_build_time = r.get("index_build_time")
+
+            # Only add a row if this run actually loaded data or built an index
+            if not load_time and not index_build_time:
+                continue
 
             build_rows.append([
                 run_date,
-                f"{r.get('load_time', 'N/A')}s" if r.get('load_time') else "N/A",
-                f"{r.get('index_build_time', 'N/A')}s" if r.get('index_build_time') else "N/A",
+                f"{load_time}s" if load_time else "N/A",
+                f"{index_build_time}s" if index_build_time else "N/A",
                 str(r.get("index_size", "N/A")),
                 str(r.get("shared_buffers", "N/A")),
                 str(r.get("maintenance_work_mem", "N/A")),
-                "yes" if r.get("fs_cache", True) else "no",
             ])
 
         if build_rows:
             lines.extend(format_markdown_table(
-                ["Date", "Load Time", "Build Time", "Index Size", "shared_buffers", "maint_work_mem", "FS Cache"],
+                ["Date", "Load Time", "Build Time", "Index Size", "shared_buffers", "maint_work_mem"],
                 build_rows))
+        else:
+            lines.append("*No build data recorded across runs.*")
 
         # --- Build time chart (latest run) ---
         build_chart = self._charts_dir(test_name) / "build_times.png"
         if build_chart.exists():
             lines.extend(["", f"![Build Time Breakdown](charts/{build_chart.name})", ""])
 
-        # --- Benchmark Results (each run as a section, newest first) ---
+        # --- Benchmark Results (unified table across all runs, ordered by timestamp) ---
         lines.extend(["", "---", "", "## Benchmark Results", ""])
 
-        for run_data in reversed(all_runs):
-            lines.extend(self._build_run_section(suite_type, run_data))
+        bench_rows = []
+        for run_data in all_runs:
+            r = run_data.get("results", {})
+            c = run_data.get("config", {})
+            m = run_data.get("metadata", {})
+            run_id = m.get("run_id", "?")
+            run_date = self._run_date_str(run_id)
+
+            sb = r.get("shared_buffers", "N/A")
+            mwm = r.get("maintenance_work_mem", "N/A")
+            fs_cache = r.get("fs_cache", True)
+            cache_str = "yes" if fs_cache else "no"
+
+            benchmarks = c.get("benchmarks", {})
+            for bench_name, bench_config in benchmarks.items():
+                if bench_name in r and isinstance(r[bench_name], dict) and "recall" in r[bench_name]:
+                    br = r[bench_name]
+                    if suite_type == "pgvector":
+                        bench_rows.append([
+                            run_date,
+                            sb,
+                            mwm,
+                            cache_str,
+                            str(bench_config.get("efSearch", "N/A")),
+                            f"{br['recall']:.4f}",
+                            f"{br['qps']:.2f}",
+                            f"{br['p50_latency']:.2f}",
+                            f"{br['p99_latency']:.2f}",
+                        ])
+                    else:
+                        bench_rows.append([
+                            run_date,
+                            sb,
+                            mwm,
+                            cache_str,
+                            str(bench_config.get("nprob", "N/A")),
+                            str(bench_config.get("epsilon", "N/A")),
+                            f"{br['recall']:.4f}",
+                            f"{br['qps']:.2f}",
+                            f"{br['p50_latency']:.2f}",
+                            f"{br['p99_latency']:.2f}",
+                        ])
+
+        if bench_rows:
+            if suite_type == "pgvector":
+                lines.extend(format_markdown_table(
+                    ["Date", "shared_buffers", "maint_work_mem", "Page Cache",
+                     "EF Search", "Recall", "QPS", "P50 (ms)", "P99 (ms)"],
+                    bench_rows))
+            else:
+                lines.extend(format_markdown_table(
+                    ["Date", "shared_buffers", "maint_work_mem", "Page Cache",
+                     "nprob", "epsilon", "Recall", "QPS", "P50 (ms)", "P99 (ms)"],
+                    bench_rows))
+        else:
+            lines.append("*No benchmark results recorded.*")
 
         # --- Charts (latest run) ---
-        lines.extend(["---", "", "## Charts", ""])
+        lines.extend(["", "---", "", "## Charts", ""])
 
         recall_chart = self._charts_dir(test_name) / "recall_vs_qps.png"
         if recall_chart.exists():
@@ -504,7 +672,7 @@ class ResultsManager:
         if latency_chart.exists():
             lines.extend(["### Query Latency", "", f"![Query Latency](charts/{latency_chart.name})", ""])
 
-        # --- System metrics ---
+        # --- System metrics (latest run only) ---
         if system_metrics:
             lines.extend(["---", "", system_metrics])
             dashboard = self._charts_dir(test_name) / "system_dashboard.png"
@@ -538,8 +706,11 @@ class ResultsManager:
             self._current_run_id = self._generate_run_id()
             suite_results = results.get(test_name, {})
 
-            # Save raw results
-            self.save_raw_results(test_name, suite_config, suite_results)
+            # Save raw results (includes system_metrics and pg_stats)
+            self.save_raw_results(
+                test_name, suite_type, suite_config, suite_results,
+                system_metrics=system_metrics, pg_stats=pg_stats,
+            )
 
             # Append each benchmark to consolidated CSV
             for bench_name, bench_config in suite_config.get("benchmarks", {}).items():
@@ -552,13 +723,34 @@ class ResultsManager:
                     benchmark_config=bench_config,
                 )
 
-            # Copy system dashboard to test charts directory
+            # Copy system dashboard to both test charts dir and run dir
             if system_dashboard_path and system_dashboard_path.exists():
-                import shutil
                 dest = self._charts_dir(test_name) / "system_dashboard.png"
                 shutil.copy(system_dashboard_path, dest)
+                run_dest = self._run_dir(test_name) / "system_dashboard.png"
+                shutil.copy(system_dashboard_path, run_dest)
 
-            # Generate incremental report
+            # Generate per-run report
+            run_data = {
+                "metadata": {
+                    "run_id": self._current_run_id,
+                    "test_name": test_name,
+                    "suite_type": suite_type,
+                    "hostname": self.hostname,
+                },
+                "config": suite_config,
+                "results": suite_results,
+                "system_metrics": system_metrics,
+                "pg_stats": pg_stats,
+            }
+            run_report = self._generate_run_report(
+                test_name, suite_type, run_data, query_clients, system_dashboard_path,
+            )
+            run_report_path = self._run_dir(test_name) / "report.md"
+            with open(run_report_path, "w") as f:
+                f.write(run_report)
+
+            # Generate aggregated report
             self.generate_markdown_report(
                 suite_type=suite_type,
                 test_name=test_name,
