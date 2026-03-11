@@ -140,6 +140,42 @@ class TestSuite(common.TestSuite):
         finally:
             conn.close()
 
+    @staticmethod
+    def estimate_vchordrq_index_size(num_vectors: int, dim: int, lists) -> int:
+        """Estimate on-disk vchordrq (IVF-RaBitQ) index size in bytes.
+
+        The index stores full f32 vectors for re-ranking (~95% of size)
+        plus RaBitQ codes and metadata. Lists can be a single int or a
+        hierarchical list like [400, 160000].
+
+        Validated against:
+          dim=768, 5M vecs,   lists=[190,35000]   -> ~3% off (actual 21 GB)
+          dim=768, 100M vecs, lists=[400,160000]  -> ~2% off (actual 400 GB)
+          dim=96,  1B vecs,   lists=[400,160000]  -> ~3% off (actual 469 GB)
+        """
+        import math
+
+        def maxalign(x):
+            return (x + 7) & ~7
+
+        PAGE_USABLE = 8192 - 40
+
+        # Vector tuples: full f32 vectors packed into 8KB pages
+        vt_size = maxalign(4 * dim + 32)
+        vt_per_page = max(1, PAGE_USABLE // vt_size)
+        vector_bytes = (PAGE_USABLE / vt_per_page) * num_vectors
+
+        # Frozen tuples: RaBitQ codes + metadata (~30 bytes/vec + packed codes)
+        frozen_bytes = (30 + math.ceil(dim / 8) / 32 * 16) * num_vectors
+
+        # Centroid pages
+        total_lists = sum(lists) if isinstance(lists, list) else lists
+        cent_size = maxalign(4 * dim + 32)
+        cents_per_page = max(1, PAGE_USABLE // cent_size)
+        centroid_bytes = math.ceil(total_lists / cents_per_page) * 8192
+
+        return int((vector_bytes + frozen_bytes + centroid_bytes) * 1.05)
+
     def create_index(self, suite_name: str, table_name: str, dataset: dict):
         """Create an IVF index using VectorChord."""
         event, index_monitor_thread = super().create_index(
@@ -156,6 +192,13 @@ class TestSuite(common.TestSuite):
         sampling_factor = config["samplingFactor"]
         residual_quantization = config["residual_quantization"]
         metric = dataset["metric"]
+
+        num_vectors = dataset.get("num", 0)
+        dim = dataset.get("dim", 0)
+        if num_vectors and dim:
+            est_bytes = self.estimate_vchordrq_index_size(num_vectors, dim, lists)
+            est_gb = est_bytes / (1024 ** 3)
+            print(f"Estimated on-disk index size: {est_gb:.1f} GB")
 
         if self.debug:
             print(f"\n🔧 Index Configuration (VectorChord):")
