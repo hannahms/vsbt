@@ -1,10 +1,10 @@
-pgvector-laion-1B-m16-128:
-  dataset: deep1b-test-l2
-  datasetType: npy
-  pg_parallel_workers: 64
-  metric: l2
+pgvector-laion-100m-m16-64:
+  dataset: laion-100m-test-ip
+  datasetType: hdf5
+  pg_parallel_workers: 32
+  metric: dot
   m: 16
-  efConstruction: 128
+  efConstruction: 64
   top: 10
   benchmarks:
     "10": { efSearch: 10 }

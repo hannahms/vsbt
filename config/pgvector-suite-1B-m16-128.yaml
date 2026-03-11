@@ -1,7 +1,7 @@
 pgvector-laion-1B-m16-128:
   dataset: deep1b-test-l2
   datasetType: npy
-  pg_parallel_workers: 64
+  pg_parallel_workers: 32
   metric: l2
   m: 16
   efConstruction: 128

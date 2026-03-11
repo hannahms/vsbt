@@ -1,10 +1,10 @@
-vc-laion-100m-400-160k:
+vc-laion-100m-570-320k:
   dataset: laion-100m-test-ip
   datasetType: hdf5
   metric: dot
   samplingFactor: 256 # Note: these are the settings to be reduced for faster execution on CPU
   kmeans_dimension: 768 # Note: these are the settings to be reduced for faster execution on CPU
-  lists: [400, 160000]
+  lists: [570, 320000]
   build_threads: 32
   residual_quantization: true
   kmeans_hierarchical: true
