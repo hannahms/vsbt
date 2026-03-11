@@ -88,6 +88,8 @@ def download_http_file(url: str, path: str):
                 unit='iB',
                 unit_scale=True,
                 unit_divisor=1024,
+                ncols=80,
+                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{rate_fmt}]',
         ) as bar:
             for chunk in response.iter_content(chunk_size=8192):
                 size = f.write(chunk)
