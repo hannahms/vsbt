@@ -10,66 +10,117 @@ vc-deep1B-400-160k:
   pg_parallel_workers: 32
   top: 10
   benchmarks:
-    10-20-1.0:
-      nprob: 10,20
-      epsilon: 1.0
-    10-20-1.5:
-      nprob: 10,20
+    5-30-1.5:
+      nprob: 5,30
       epsilon: 1.5
-    10-20-1.9:
-      nprob: 10,20
+    5-30-1.9:
+      nprob: 5,30
       epsilon: 1.9
-    15-30-1.0:
-      nprob: 15,30
-      epsilon: 1.0
-    15-30-1.5:
-      nprob: 15,30
+    5-50-1.5:
+      nprob: 5,50
       epsilon: 1.5
-    15-30-1.9:
-      nprob: 15,30
+    5-50-1.9:
+      nprob: 5,50
       epsilon: 1.9
-    20-40-1.0:
-      nprob: 20,40
-      epsilon: 1.0
-    20-40-1.5:
-      nprob: 20,40
+    10-50-1.5:
+      nprob: 10,50
       epsilon: 1.5
-    20-40-1.9:
-      nprob: 20,40
+    10-50-1.9:
+      nprob: 10,50
       epsilon: 1.9
-    25-50-1.0:
-      nprob: 25,50
-      epsilon: 1.0
-    25-50-1.5:
-      nprob: 25,50
+    10-75-1.5:
+      nprob: 10,75
       epsilon: 1.5
-    25-50-1.9:
-      nprob: 25,50
+    10-75-1.9:
+      nprob: 10,75
       epsilon: 1.9
-    50-100-1.0:
-      nprob: 50,100
-      epsilon: 1.0
-    50-100-1.5:
-      nprob: 50,100
+    15-75-1.5:
+      nprob: 15,75
       epsilon: 1.5
-    50-100-1.9:
-      nprob: 50,100
+    15-75-1.9:
+      nprob: 15,75
       epsilon: 1.9
-    100-200-1.0:
-      nprob: 100,200
-      epsilon: 1.0
-    100-200-1.5:
-      nprob: 100,200
+    15-100-1.5:
+      nprob: 15,100
       epsilon: 1.5
-    100-200-1.9:
-      nprob: 100,200
+    15-100-1.9:
+      nprob: 15,100
       epsilon: 1.9
-    200-400-1.0:
-      nprob: 200,400
-      epsilon: 1.0
-    200-400-1.5:
-      nprob: 200,400
+    20-100-1.5:
+      nprob: 20,100
       epsilon: 1.5
-    200-400-1.9:
-      nprob: 200,400
+    20-100-1.9:
+      nprob: 20,100
+      epsilon: 1.9
+    20-125-1.5:
+      nprob: 20,125
+      epsilon: 1.5
+    20-125-1.9:
+      nprob: 20,125
+      epsilon: 1.9
+    25-125-1.5:
+      nprob: 25,125
+      epsilon: 1.5
+    25-125-1.9:
+      nprob: 25,125
+      epsilon: 1.9
+    25-150-1.5:
+      nprob: 25,150
+      epsilon: 1.5
+    25-150-1.9:
+      nprob: 25,150
+      epsilon: 1.9
+    30-150-1.5:
+      nprob: 30,150
+      epsilon: 1.5
+    30-150-1.9:
+      nprob: 30,150
+      epsilon: 1.9
+    30-175-1.5:
+      nprob: 30,175
+      epsilon: 1.5
+    30-175-1.9:
+      nprob: 30,175
+      epsilon: 1.9
+    35-175-1.5:
+      nprob: 35,175
+      epsilon: 1.5
+    35-175-1.9:
+      nprob: 35,175
+      epsilon: 1.9
+    35-200-1.5:
+      nprob: 35,200
+      epsilon: 1.5
+    35-200-1.9:
+      nprob: 35,200
+      epsilon: 1.9
+    40-200-1.5:
+      nprob: 40,200
+      epsilon: 1.5
+    40-200-1.9:
+      nprob: 40,200
+      epsilon: 1.9
+    40-225-1.5:
+      nprob: 40,225
+      epsilon: 1.5
+    40-225-1.9:
+      nprob: 40,225
+      epsilon: 1.9
+    45-225-1.5:
+      nprob: 45,225
+      epsilon: 1.5
+    45-225-1.9:
+      nprob: 45,225
+      epsilon: 1.9
+    45-250-1.5:
+      nprob: 45,250
+      epsilon: 1.5
+    45-250-1.9:
+      nprob: 45,250
+      epsilon: 1.9
+    50-250-1.5:
+      nprob: 50,250
+      epsilon: 1.5
+    50-250-1.9:
+      nprob: 50,250
       epsilon: 1.9
