@@ -1,0 +1,30 @@
+vc-laion-100m-570-320k:
+  dataset: laion-100m-test-ip
+  datasetType: hdf5
+  metric: dot
+  samplingFactor: 256
+  lists: [570, 320000]
+  build_threads: 32
+  residual_quantization: true
+  kmeans_hierarchical: true
+  pg_parallel_workers: 32
+  top: 10
+  benchmarks:
+    10-80-1.9:
+      nprob: 10,80
+      epsilon: 1.9
+    15-120-1.9:
+      nprob: 15,120
+      epsilon: 1.9
+    17-140-1.9:
+      nprob: 17,140
+      epsilon: 1.9
+    20-160-1.9:
+      nprob: 20,160
+      epsilon: 1.9
+    25-200-1.9:
+      nprob: 25,200
+      epsilon: 1.9
+    30-240-1.9:
+      nprob: 30,240
+      epsilon: 1.9

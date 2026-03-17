@@ -2,6 +2,7 @@ import argparse
 import gc
 import multiprocessing as mp
 import os
+import re
 import threading
 import time
 
@@ -462,6 +463,17 @@ class TestSuite:
                 )
         self.debug_log(f"Imported {len(centroids)} centroids into {table_name}.")
 
+    @staticmethod
+    def _parse_phase(raw_phase: str):
+        """Strip embedded percentage from phase names like '... (30 %)'.
+
+        Returns (base_phase, pct) where pct is an int 0-100 or None.
+        """
+        m = re.match(r'^(.*?)\s*\((\d+)\s*%\)\s*$', raw_phase)
+        if m:
+            return m.group(1).rstrip(), int(m.group(2))
+        return raw_phase, None
+
     def monitor_index_build(self, event: threading.Event):
         conn = self.create_connection()
         with conn.cursor() as acur:
@@ -483,16 +495,25 @@ class TestSuite:
                 if result:
                     blocks_done = result[0] or 0
                     new_total = result[1] or 0
-                    new_phase = result[2] or phase
+                    raw_phase = result[2] or phase
+                    base_phase, embedded_pct = self._parse_phase(raw_phase)
 
-                    if new_phase != phase:
+                    if base_phase != phase:
                         if pbar is not None:
                             pbar.close()
                             pbar = None
-                        phase = new_phase
-                        print(f"Building index ({phase})...", flush=True)
+                        phase = base_phase
 
-                    if new_total > 0:
+                        if embedded_pct is None and new_total == 0:
+                            print(f"Building index ({phase})...", flush=True)
+
+                    if embedded_pct is not None:
+                        if pbar is None:
+                            pbar = tqdm(smoothing=0.0, total=100,
+                                        desc=f"Building index ({phase})", ncols=100,
+                                        bar_format="{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]")
+                        pbar.update(max(embedded_pct - pbar.n, 0))
+                    elif new_total > 0:
                         if pbar is None:
                             pbar = tqdm(smoothing=0.0, total=new_total,
                                         desc=f"Building index ({phase})", ncols=100,
@@ -505,16 +526,23 @@ class TestSuite:
 
                 time.sleep(0.5)
 
+    def index_name(self, table_name: str) -> str:
+        return f"{table_name}_embedding_idx"
+
     def create_index(self, suite_name: str, table_name: str, dataset: dict) -> tuple[
         threading.Event, threading.Thread]:
         os.makedirs(f"./results/{suite_name}/index_build", exist_ok=True)
         conn = self.create_connection()
-        print(f"Dropping index {table_name}_embedding_idx...", end="", flush=True)
-        try:
-            conn.execute(f"DROP INDEX IF EXISTS {table_name}_embedding_idx")
-            print(" done!")
-        except Exception:
-            print(" failed!")
+        idx_name = self.index_name(table_name)
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_indexes WHERE indexname = %s", (idx_name,))
+            if cur.fetchone():
+                print(f"Dropping index {idx_name}...", end="", flush=True)
+                try:
+                    conn.execute(f"DROP INDEX IF EXISTS {idx_name}")
+                    print(" done!")
+                except Exception:
+                    print(" failed!")
 
         pg_parallel_workers = self.config[suite_name].get("pg_parallel_workers")
         if pg_parallel_workers is not None:

@@ -28,8 +28,12 @@ class TestSuite(common.TestSuite):
     Test suite for PGPU GPU-accelerated vector indexing.
 
     Uses the pgpu extension to build IVF indexes on GPU,
+
     then queries using VectorChord's vchordrq index type.
     """
+
+    def index_name(self, table_name: str) -> str:
+        return f"{table_name}_pgpu_ext"
 
     @staticmethod
     def process_batch(args):
