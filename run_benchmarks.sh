@@ -27,9 +27,11 @@ echo "Runner:  $RUNNER"
 echo "SB list: ${SB_LIST[*]}"
 echo ""
 
+# Phase 1: all cached runs (page cache stays warm across restarts)
+echo "=== Phase 1: With page cache ==="
 for SB in "${SB_LIST[@]}"; do
   echo "============================================"
-  echo "  Testing shared_buffers = $SB"
+  echo "  Testing shared_buffers = $SB (cached)"
   echo "============================================"
 
   psql -U postgres -c "ALTER SYSTEM SET shared_buffers = '$SB'"
@@ -39,13 +41,25 @@ for SB in "${SB_LIST[@]}"; do
 
   psql -U postgres -c "SHOW shared_buffers"
 
-  echo "--- With page cache ---"
   cd $WORKDIR && python3 "$RUNNER" -s "$SUITE" --skip-add-embeddings --skip-index-creation
+  echo ""
+done
 
-  echo "--- Without page cache ---"
+# Phase 2: all no-cache runs
+echo "=== Phase 2: Without page cache ==="
+for SB in "${SB_LIST[@]}"; do
+  echo "============================================"
+  echo "  Testing shared_buffers = $SB (no cache)"
+  echo "============================================"
+
+  psql -U postgres -c "ALTER SYSTEM SET shared_buffers = '$SB'"
+  psql -U postgres -c "ALTER SYSTEM SET maintenance_work_mem = '16GB'"
+  systemctl restart postgresql-17
+  sleep 10
+
+  psql -U postgres -c "SHOW shared_buffers"
+
   cd $WORKDIR && python3 "$RUNNER" -s "$SUITE" --skip-add-embeddings --skip-index-creation --no-fs-cache
-
-  echo "Done with shared_buffers = $SB"
   echo ""
 done
 
