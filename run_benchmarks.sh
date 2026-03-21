@@ -1,9 +1,10 @@
 #!/bin/bash
 set -e
 
-SUITE="${1:?Usage: $0 <config.yaml> [5m|100m|1b|SB:RAM,...] [query-clients]}"
+SUITE="${1:?Usage: $0 <config.yaml> [5m|100m|1b|SB:RAM,...] [query-clients] [max-queries]}"
 SCALE="${2:-100m}"
 QUERY_CLIENTS="${3:-1}"
+MAX_QUERIES="${4:-}"
 WORKDIR="/data/vsbt"
 TOTAL_RAM_GB=1511
 HUGEPAGE_SIZE_MB=2
@@ -34,11 +35,17 @@ case "$SCALE" in
     ;;
 esac
 
-echo "Config:   $SUITE"
-echo "Runner:   $RUNNER"
-echo "Scale:    $SCALE"
-echo "Clients:  $QUERY_CLIENTS"
-echo "Tiers:    ${TIERS[*]}"
+MAX_QUERIES_ARG=""
+if [ -n "$MAX_QUERIES" ]; then
+  MAX_QUERIES_ARG="--max-queries $MAX_QUERIES"
+fi
+
+echo "Config:      $SUITE"
+echo "Runner:      $RUNNER"
+echo "Scale:       $SCALE"
+echo "Clients:     $QUERY_CLIENTS"
+echo "Max queries: ${MAX_QUERIES:-all}"
+echo "Tiers:       ${TIERS[*]}"
 echo ""
 
 release_hugepages() {
@@ -93,8 +100,8 @@ for TIER in "${TIERS[@]}"; do
   fi
 
   # 2. Set shared_buffers for this tier
-  psql -U postgres -c "ALTER SYSTEM SET shared_buffers = '${SB_GB}GB'"
-  psql -U postgres -c "ALTER SYSTEM SET maintenance_work_mem = '16GB'"
+  psql -U postgres -q -c "ALTER SYSTEM SET shared_buffers = '${SB_GB}GB'"
+  psql -U postgres -q -c "ALTER SYSTEM SET maintenance_work_mem = '64MB'"
 
   # 3. Stop PG before locking memory
   systemctl stop postgresql-17
@@ -115,10 +122,15 @@ for TIER in "${TIERS[@]}"; do
   fi
   sleep 10
 
-  psql -U postgres -c "SHOW shared_buffers"
+  ACTUAL_SB=$(psql -U postgres -tA -c "SHOW shared_buffers")
+  if [ "$ACTUAL_SB" != "${SB_GB}GB" ]; then
+    echo "ERROR: shared_buffers mismatch! Expected ${SB_GB}GB, got $ACTUAL_SB"
+    release_hugepages
+    continue
+  fi
 
   # 6. Run benchmark
-  cd "$WORKDIR" && python3 "$RUNNER" -s "$SUITE" --skip-add-embeddings --skip-index-creation --query-clients "$QUERY_CLIENTS"
+  cd "$WORKDIR" && python3 "$RUNNER" -s "$SUITE" --skip-add-embeddings --skip-index-creation --query-clients "$QUERY_CLIENTS" $MAX_QUERIES_ARG
 
   echo ""
 done

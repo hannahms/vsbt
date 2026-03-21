@@ -91,6 +91,14 @@ def build_arg_parse(parser: argparse.ArgumentParser):
     )
 
     parser.add_argument(
+        "--max-queries",
+        type=int,
+        help="Limit the number of queries per benchmark (default: use full test set)",
+        default=None,
+        required=False,
+    )
+
+    parser.add_argument(
         "--debug",
         help="Enable debug logging",
         action="store_true",
@@ -130,13 +138,6 @@ def build_arg_parse(parser: argparse.ArgumentParser):
         required=False,
     )
 
-    parser.add_argument(
-        "--no-fs-cache",
-        help="Drop filesystem cache after prewarm to measure pure shared_buffers performance",
-        action="store_true",
-        default=False,
-        required=False,
-    )
 
 
 def get_keepalive_kwargs() -> dict:
@@ -233,7 +234,7 @@ class TestSuite:
                  overwrite_table: bool = False,
                  debug_single_query: bool = False,
                  build_only: bool = False,
-                 no_fs_cache: bool = False):
+                 max_queries: int = None):
         self.suite_file = suite_file
         self.config = load_suite_config(suite_file)
         self.url = url
@@ -250,7 +251,7 @@ class TestSuite:
         self.overwrite_table = overwrite_table
         self.debug_single_query = debug_single_query
         self.build_only = build_only
-        self.no_fs_cache = no_fs_cache
+        self.max_queries = max_queries
 
         # Check if database is local or remote
         self.is_local_db = is_local_database(url)
@@ -283,24 +284,25 @@ class TestSuite:
     def make_batch_args(self, test, answer, top, metric_ops, table_name, benchmark):
         return test, answer, top, metric_ops, table_name
 
-    def check_index_fits_shared_buffers(self, conn, index_name: str):
-        """Check if the index fits in shared_buffers and warn if not."""
+    def check_index_fits_shared_buffers(self, conn, index_name: str, table_name: str):
+        """Check if the index fits in shared_buffers and print size summary."""
         try:
             row = conn.execute(
                 "SELECT pg_relation_size(%s) AS idx_size, "
+                "pg_relation_size(%s) AS tbl_size, "
                 "setting::bigint * 8192 AS sb_size "
                 "FROM pg_settings WHERE name = 'shared_buffers'",
-                (index_name,),
+                (index_name, table_name),
             ).fetchone()
             if row:
-                idx_size, sb_size = row
+                idx_size, tbl_size, sb_size = row
                 idx_gb = idx_size / (1024 ** 3)
+                tbl_gb = tbl_size / (1024 ** 3)
                 sb_gb = sb_size / (1024 ** 3)
                 coverage = min(100.0, 100.0 * sb_size / idx_size) if idx_size > 0 else 0
-                print(f"Index size: {idx_gb:.1f} GB, shared_buffers: {sb_gb:.1f} GB "
-                      f"(index coverage: {coverage:.1f}%)")
-                if idx_size > sb_size:
-                    print(f"WARNING: Index ({idx_gb:.1f} GB) > shared_buffers ({sb_gb:.1f} GB), prewarm will be partial.")
+                partial = " (prewarm will be partial)" if idx_size > sb_size else ""
+                print(f"Table: {tbl_gb:.1f} GB | Index: {idx_gb:.1f} GB | "
+                      f"shared_buffers: {sb_gb:.1f} GB (index coverage: {coverage:.1f}%){partial}")
         except psycopg.Error:
             pass
 
@@ -574,7 +576,6 @@ class TestSuite:
             )
             result = acur.fetchone()
             self.results[suite_name]["index_size"] = result[0]
-            print(f"Index size: {result[0]}")
         conn.close()
 
     def sequential_bench(self, name: str, table_name: str, conn: psycopg.Connection, metric_ops: str, top: int,
@@ -779,26 +780,15 @@ class TestSuite:
 
         print()
 
-    def _drop_fs_cache(self):
-        """Drop OS filesystem cache. Requires root/sudo."""
-        import subprocess
-        print("Dropping filesystem cache...", end="", flush=True)
-        try:
-            subprocess.run(
-                ["sudo", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches"],
-                check=True,
-            )
-            print(" done!")
-        except subprocess.CalledProcessError as e:
-            print(f" failed! ({e})")
-            print("WARNING: Could not drop filesystem cache. Run with sudo or configure passwordless sudo.")
-
     def run_benchmarks(self, suite_name: str, table_name: str, dataset: dict, query_clients):
+        # Limit queries if requested
+        if self.max_queries and dataset["test"].shape[0] > self.max_queries:
+            dataset = {**dataset,
+                       "test": dataset["test"][:self.max_queries],
+                       "answer": dataset["answer"][:self.max_queries]}
+
         # Prewarm index once before all benchmarks
         self.prewarm_index(table_name)
-
-        if self.no_fs_cache:
-            self._drop_fs_cache()
 
         for name, benchmark in self.config[suite_name]["benchmarks"].items():
             print(f"Running benchmark: {benchmark}")
@@ -815,7 +805,6 @@ class TestSuite:
     def run_suite(self, name: str):
         os.makedirs(f"./results/{name}", exist_ok=True)
         self.results[name] = {}
-        self.results[name]["fs_cache"] = not self.no_fs_cache
         self.results[name]["query_clients"] = self.query_clients
         if self._system_report_content:
             self.results[name]["system_report"] = self._system_report_content

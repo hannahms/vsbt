@@ -113,7 +113,7 @@ class TestSuite(common.TestSuite):
         """Prewarm the index into memory for consistent benchmarking."""
         index_name = f"{table_name}_pgpu_ext"
         conn = self.create_connection()
-        self.check_index_fits_shared_buffers(conn, index_name)
+        self.check_index_fits_shared_buffers(conn, index_name, table_name)
         print("Prewarming the index...", end="", flush=True)
         try:
             prewarm_start = time.perf_counter()
@@ -286,7 +286,7 @@ def main():
         overwrite_table=args.overwrite_table,
         debug_single_query=args.debug_single_query,
         build_only=args.build_only,
-        no_fs_cache=args.no_fs_cache,
+        max_queries=args.max_queries,
     )
 
     test_suite.run()

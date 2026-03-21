@@ -355,8 +355,7 @@ class ResultsManager:
 
         sb = results.get("shared_buffers", "N/A")
         mwm = results.get("maintenance_work_mem", "N/A")
-        fs_cache = results.get("fs_cache", True)
-        cache_str = "with page cache" if fs_cache else "no page cache"
+        qc = results.get("query_clients", 1)
 
         lines = [
             f"# Run Report: {test_name}",
@@ -366,7 +365,7 @@ class ResultsManager:
             f"**Suite Type:** {suite_type}",
             f"**shared_buffers:** {sb}",
             f"**maintenance_work_mem:** {mwm}",
-            f"**Page Cache:** {cache_str}",
+            f"**Query Clients:** {qc}",
             "",
         ]
 
@@ -571,8 +570,7 @@ class ResultsManager:
 
             sb = r.get("shared_buffers", "N/A")
             mwm = r.get("maintenance_work_mem", "N/A")
-            fs_cache = r.get("fs_cache", True)
-            cache_str = "yes" if fs_cache else "no"
+            qc = r.get("query_clients", 1)
 
             benchmarks = c.get("benchmarks", {})
             for bench_name, bench_config in benchmarks.items():
@@ -582,8 +580,7 @@ class ResultsManager:
                         bench_rows.append([
                             run_date,
                             sb,
-                            mwm,
-                            cache_str,
+                            str(qc),
                             str(bench_config.get("efSearch", "N/A")),
                             f"{br['recall']:.4f}",
                             f"{br['qps']:.2f}",
@@ -594,8 +591,7 @@ class ResultsManager:
                         bench_rows.append([
                             run_date,
                             sb,
-                            mwm,
-                            cache_str,
+                            str(qc),
                             str(bench_config.get("nprob", "N/A")),
                             str(bench_config.get("epsilon", "N/A")),
                             f"{br['recall']:.4f}",
@@ -607,12 +603,12 @@ class ResultsManager:
         if bench_rows:
             if suite_type == "pgvector":
                 lines.extend(format_markdown_table(
-                    ["Date", "shared_buffers", "maint_work_mem", "Page Cache",
+                    ["Date", "shared_buffers", "Clients",
                      "EF Search", "Recall", "QPS", "P50 (ms)", "P99 (ms)"],
                     bench_rows))
             else:
                 lines.extend(format_markdown_table(
-                    ["Date", "shared_buffers", "maint_work_mem", "Page Cache",
+                    ["Date", "shared_buffers", "Clients",
                      "nprob", "epsilon", "Recall", "QPS", "P50 (ms)", "P99 (ms)"],
                     bench_rows))
         else:
