@@ -289,7 +289,7 @@ class TestSuite:
         try:
             row = conn.execute(
                 "SELECT pg_relation_size(%s) AS idx_size, "
-                "pg_relation_size(%s) AS tbl_size, "
+                "pg_total_relation_size(%s) AS tbl_size, "
                 "setting::bigint * 8192 AS sb_size "
                 "FROM pg_settings WHERE name = 'shared_buffers'",
                 (index_name, table_name),
