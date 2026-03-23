@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-SUITE="${1:?Usage: $0 <config.yaml> [5m|100m|1b|SB:RAM,...] [query-clients] [max-queries]}"
+SUITE="${1:?Usage: $0 <config.yaml> [5m|100m|1b|SB:RAM,...] [query-clients: 1,32] [max-queries]}"
 SCALE="${2:-100m}"
-QUERY_CLIENTS="${3:-1}"
+IFS=',' read -ra CLIENT_LIST <<< "${3:-1}"
 MAX_QUERIES="${4:-}"
 WORKDIR="/data/vsbt"
 TOTAL_RAM_GB=1511
@@ -43,7 +43,7 @@ fi
 echo "Config:      $SUITE"
 echo "Runner:      $RUNNER"
 echo "Scale:       $SCALE"
-echo "Clients:     $QUERY_CLIENTS"
+echo "Clients:     ${CLIENT_LIST[*]}"
 echo "Max queries: ${MAX_QUERIES:-all}"
 echo "Tiers:       ${TIERS[*]}"
 echo ""
@@ -129,8 +129,11 @@ for TIER in "${TIERS[@]}"; do
     continue
   fi
 
-  # 6. Run benchmark
-  cd "$WORKDIR" && python3 "$RUNNER" -s "$SUITE" --skip-add-embeddings --skip-index-creation --query-clients "$QUERY_CLIENTS" $MAX_QUERIES_ARG
+  # 6. Run benchmarks for each client count
+  for CLIENTS in "${CLIENT_LIST[@]}"; do
+    echo "  --- $CLIENTS client(s) ---"
+    cd "$WORKDIR" && python3 "$RUNNER" -s "$SUITE" --skip-add-embeddings --skip-index-creation --query-clients "$CLIENTS" $MAX_QUERIES_ARG
+  done
 
   echo ""
 done
