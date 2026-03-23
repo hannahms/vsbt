@@ -749,12 +749,12 @@ class TestSuite:
             return
 
         sb = results.get("shared_buffers", "N/A")
-        mwm = results.get("maintenance_work_mem", "N/A")
         idx_size = results.get("index_size", "N/A")
+        qc = results.get("query_clients", 1)
 
         print(f"\n{'=' * len(sep)}")
         print(f"  Results Summary: {suite_name}")
-        print(f"  shared_buffers: {sb} | maintenance_work_mem: {mwm} | index_size: {idx_size}")
+        print(f"  shared_buffers: {sb} | clients: {qc} | index_size: {idx_size}")
         print(f"{'=' * len(sep)}")
         print(header)
         print(sep)
